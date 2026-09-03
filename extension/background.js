@@ -52,6 +52,49 @@ async function page(tabId, message) {
         if (value === undefined) return null;
         return JSON.parse(safeStringify(value));
       }
+      if (m.type === 'screenshot_region') {
+        const element = m.selector ? document.querySelector(m.selector) : null;
+        if (m.selector && !element) return 'element_not_found';
+        const rect = element?.getBoundingClientRect();
+        const width = Math.max(
+          document.documentElement.scrollWidth,
+          document.body?.scrollWidth ?? 0,
+          document.documentElement.clientWidth,
+        );
+        const height = Math.max(
+          document.documentElement.scrollHeight,
+          document.body?.scrollHeight ?? 0,
+          document.documentElement.clientHeight,
+        );
+        return {
+          region: rect
+            ? { x: rect.left + scrollX, y: rect.top + scrollY, width: rect.width, height: rect.height }
+            : { x: 0, y: 0, width, height },
+          viewport: { width: innerWidth, height: innerHeight },
+          document: { width, height },
+          scroll: { x: scrollX, y: scrollY },
+          devicePixelRatio,
+        };
+      }
+      if (m.type === 'screenshot_scroll') {
+        scrollTo(m.x, m.y);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return { x: scrollX, y: scrollY };
+      }
+      if (m.type === 'screenshot_sticky') {
+        const key = '__browserControllerStickyRestore';
+        if (m.hide) {
+          if (!window[key]) window[key] = [...document.querySelectorAll('body *')]
+            .filter((element) => ['fixed', 'sticky'].includes(getComputedStyle(element).position))
+            .map((element) => ({ element, visibility: element.style.visibility }));
+          for (const entry of window[key]) entry.element.style.setProperty('visibility', 'hidden', 'important');
+          return { hidden: window[key].length };
+        }
+        for (const entry of window[key] ?? []) entry.element.style.visibility = entry.visibility;
+        const restored = window[key]?.length ?? 0;
+        delete window[key];
+        return { restored };
+      }
 
       const normalize = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
       const matches = (actual, expected, exact = false) => {
@@ -107,67 +150,61 @@ async function page(tabId, message) {
           : m.type === 'wait' && m.text
             ? { by: 'text', value: m.text }
             : undefined);
-      const locate = () => {
-        if (!locator) return undefined;
-        if (locator.by === 'css') return document.querySelector(locator.value);
-        if (locator.by === 'label') {
-          const label = [...document.querySelectorAll('label')].find((candidate) =>
-            matches(candidate.textContent, locator.value, locator.exact),
+      const findAll = (target, root = document) => {
+        if (!target) return [];
+        const candidates = [...root.querySelectorAll('*')];
+        if (target.by === 'css') return [...root.querySelectorAll(target.value)];
+        if (target.by === 'label') {
+          const label = [...root.querySelectorAll('label')].find((candidate) =>
+            matches(candidate.textContent, target.value, target.exact),
           );
-          if (label)
-            return label.control ?? label.querySelector('input,textarea,select,[contenteditable=true]');
-          return (
-            [...document.querySelectorAll('input,textarea,select,[contenteditable=true]')].find(
-              (candidate) =>
-                (candidate.hasAttribute('aria-label') ||
-                  candidate.hasAttribute('aria-labelledby')) &&
-                matches(accessibleName(candidate), locator.value, locator.exact),
-            ) ?? null
-          );
-        }
-        const candidates = [...document.querySelectorAll('body *')];
-        if (locator.by === 'role')
-          return (
-            candidates.find(
-              (candidate) =>
-                (explicitRole(candidate) ?? implicitRole(candidate)) === locator.value.toLowerCase() &&
-                (!locator.name || matches(accessibleName(candidate), locator.name, locator.exact)),
-            ) ?? null
-          );
-        const matching = candidates.filter((candidate) =>
-          matches(candidate.textContent, locator.value, locator.exact),
-        );
-        return (
-          matching.find(
+          if (label) {
+            const control = label.control ?? label.querySelector('input,textarea,select,[contenteditable=true]');
+            return control ? [control] : [];
+          }
+          const control = [...root.querySelectorAll('input,textarea,select,[contenteditable=true]')].find(
             (candidate) =>
-              ![...candidate.children].some((child) =>
-                matches(child.textContent, locator.value, locator.exact),
-              ),
-          ) ??
-          matching[0] ??
-          null
+              (candidate.hasAttribute('aria-label') || candidate.hasAttribute('aria-labelledby')) &&
+              matches(accessibleName(candidate), target.value, target.exact),
+          );
+          return control ? [control] : [];
+        }
+        if (target.by === 'role')
+          return candidates.filter(
+            (candidate) =>
+              (explicitRole(candidate) ?? implicitRole(candidate)) === target.value.toLowerCase() &&
+              (!target.name || matches(accessibleName(candidate), target.name, target.exact)),
+          );
+        return candidates.filter(
+          (candidate) =>
+            matches(candidate.textContent, target.value, target.exact) &&
+            ![...candidate.children].some((child) =>
+              matches(child.textContent, target.value, target.exact),
+            ),
         );
+      };
+      const getScope = () => {
+        if (!m.within) return document;
+        const matches = findAll(m.within);
+        if (m.within.by !== 'text' || !locator) return matches[0];
+        for (const match of matches) {
+          let candidate = match;
+          while (candidate && candidate !== document.documentElement) {
+            if (findAll(locator, candidate).length) return candidate;
+            candidate = candidate.parentElement;
+          }
+        }
+        return matches[0];
+      };
+      const rawLocateAll = () => {
+        const scope = getScope();
+        return !locator || !scope ? [] : findAll(locator, scope);
       };
       const locateAll = () => {
-        if (!locator) return [];
-        if (locator.by === 'css') return [...document.querySelectorAll(locator.value)];
-        if (locator.by === 'role')
-          return [...document.querySelectorAll('body *')].filter(
-            (candidate) =>
-              (explicitRole(candidate) ?? implicitRole(candidate)) === locator.value.toLowerCase() &&
-              (!locator.name || matches(accessibleName(candidate), locator.name, locator.exact)),
-          );
-        if (locator.by === 'text')
-          return [...document.querySelectorAll('body *')].filter(
-            (candidate) =>
-              matches(candidate.textContent, locator.value, locator.exact) &&
-              ![...candidate.children].some((child) =>
-                matches(child.textContent, locator.value, locator.exact),
-              ),
-          );
-        const one = locate();
-        return one ? [one] : [];
+        const elements = rawLocateAll();
+        return m.nth === undefined ? elements : elements.slice(m.nth, m.nth + 1);
       };
+      const locate = () => locateAll()[0] ?? null;
       const visible = (element) =>
         !!element &&
         element.getClientRects().length > 0 &&
@@ -203,9 +240,10 @@ async function page(tabId, message) {
                 : waitState === 'attached'
                   ? !!element
                   : waitState === 'hidden'
-                    ? !visible(element)
+                    ? elements.every((candidate) => !visible(candidate))
                     : visible(element);
-          if (matched)
+          if (matched) {
+            const visibleCount = elements.filter(visible).length;
             return {
               action: 'matched',
               condition: m.url
@@ -220,19 +258,50 @@ async function page(tabId, message) {
                         ? 'value'
                         : m.changes
                           ? 'changes'
-                          : locator.by,
+                           : locator.by,
+              state: m.state,
+              locator,
+              observed: {
+                matchedCount: elements.length,
+                visibleCount,
+                ...(m.value !== undefined || m.changes ? { value: observedValue(element) } : {}),
+              },
               elapsedMs: Math.round(performance.now() - started),
               url: location.href,
             };
+          }
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        throw new Error('wait_timeout');
+        const elements = locateAll();
+        return {
+          action: 'timeout',
+          condition: m.url ? 'url' : m.title ? 'title' : m.evaluate ? 'evaluate' : locator?.by ?? (m.tabActive ? 'tab-active' : 'window-focused'),
+          state: m.state,
+          locator,
+          observed: {
+            matchedCount: elements.length,
+            visibleCount: elements.filter(visible).length,
+            ...(m.value !== undefined || m.changes ? { value: observedValue(elements[0]) } : {}),
+          },
+          elapsedMs: Math.round(performance.now() - started),
+          url: location.href,
+        };
       }
 
       const element = locate();
+      if (['click', 'focus', 'fill', 'type', 'select'].includes(m.type) && m.nth === undefined && rawLocateAll().length > 1)
+        return `ambiguous_locator:${rawLocateAll().length}`;
       if (locator && !element) return 'element_not_found';
       if (m.type === 'dom') {
-        const root = locator ? element : document.documentElement;
+        const allRoots = locator ? rawLocateAll() : [document.documentElement];
+        const offset = m.offset ?? 0;
+        const limit = m.limit ?? (m.offset === undefined ? 1 : 100);
+        const roots = locator
+          ? m.nth === undefined
+            ? allRoots.slice(offset, offset + limit)
+            : allRoots.slice(m.nth, m.nth + 1)
+          : allRoots;
+        const root = roots[0];
         const format = m.format ?? 'clean_html';
         const maxChars = m.maxChars ?? 50_000;
         const textChars = m.textChars ?? 100;
@@ -243,12 +312,16 @@ async function page(tabId, message) {
           return t.length > textChars ? `${t.slice(0, textChars)}…` : t;
         };
         if (format === 'html') {
-          const html = root.outerHTML;
+          const html = roots.map((candidate) => candidate.outerHTML).join('\n');
           return {
             format,
             html: html.slice(0, maxChars),
             truncated: html.length > maxChars,
+            returnedChars: Math.min(html.length, maxChars),
             totalChars: html.length,
+            offset,
+            matchedItems: allRoots.length,
+            returnedItems: roots.length,
           };
         }
         const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'head']);
@@ -260,65 +333,60 @@ async function page(tabId, message) {
         const keepAttr = (name) =>
           KEEP_ATTRS.has(name) || name === 'role' || name.startsWith('aria-') || name.startsWith('data-');
         if (format === 'clean_html') {
-          let budget = maxChars;
-          let truncated = false;
           const VOID_TAGS = new Set(['input', 'img', 'br', 'hr']);
-          const serialize = (node, depth = 0) => {
-            if (budget <= 0) {
-              truncated = true;
-              return '';
-            }
-            if (node.nodeType === Node.TEXT_NODE) {
-              const text = String(node.textContent ?? '').replace(/\s+/g, ' ').trim();
-              if (!text) return '';
-              const out = clip(text);
-              budget -= out.length + 1;
-              return `${out} `;
-            }
-            if (node.nodeType !== Node.ELEMENT_NODE) return '';
-            const el = node;
-            const tag = el.tagName.toLowerCase();
-            if (SKIP_TAGS.has(tag)) return '';
-            let attrs = '';
-            for (const attr of el.attributes) {
-              if (!keepAttr(attr.name)) continue;
-              attrs += ` ${attr.name}="${attr.value.replace(/"/g, '&quot;').slice(0, 80)}"`;
-            }
-            const open = `<${tag}${attrs}${VOID_TAGS.has(tag) ? ' /' : ''}>`;
-            if (budget - open.length < 0) {
-              truncated = true;
-              return '';
-            }
-            budget -= open.length;
-            if (VOID_TAGS.has(tag)) return open;
-            if (depth >= maxDepth) {
-              truncated = true;
-              return `${open}<!-- depth limit --></${tag}>`;
-            }
-            let body = '';
-            for (const child of el.childNodes) {
-              if (budget <= 0) {
-                truncated = true;
-                body += '\n<!-- truncated: increase --max-chars for more -->';
-                break;
+          const render = (initialBudget) => {
+            let budget = initialBudget;
+            let truncated = false;
+            const serialize = (node, depth = 0) => {
+              if (budget <= 0) return void (truncated = true) || '';
+              if (node.nodeType === Node.TEXT_NODE) {
+                const text = String(node.textContent ?? '').replace(/\s+/g, ' ').trim();
+                if (!text) return '';
+                const out = clip(text);
+                budget -= out.length + 1;
+                return `${out} `;
               }
-              body += serialize(child, depth + 1);
-            }
-            const close = `</${tag}>`;
-            budget -= close.length + 1;
-            return `${open}${body.trim() ? `\n${body}` : ''}${close}`;
+              if (node.nodeType !== Node.ELEMENT_NODE) return '';
+              const el = node;
+              const tag = el.tagName.toLowerCase();
+              if (SKIP_TAGS.has(tag)) return '';
+              let attrs = '';
+              for (const attr of el.attributes) {
+                if (keepAttr(attr.name)) attrs += ` ${attr.name}="${attr.value.replace(/"/g, '&quot;').slice(0, 80)}"`;
+              }
+              const open = `<${tag}${attrs}${VOID_TAGS.has(tag) ? ' /' : ''}>`;
+              if (budget - open.length < 0) return void (truncated = true) || '';
+              budget -= open.length;
+              if (VOID_TAGS.has(tag)) return open;
+              if (depth >= maxDepth) return void (truncated = true) || `${open}<!-- depth limit --></${tag}>`;
+              let body = '';
+              for (const child of el.childNodes) {
+                if (budget <= 0) {
+                  truncated = true;
+                  body += '\n<!-- truncated: increase --max-chars for more -->';
+                  break;
+                }
+                body += serialize(child, depth + 1);
+              }
+              const close = `</${tag}>`;
+              budget -= close.length + 1;
+              return `${open}${body.trim() ? `\n${body}` : ''}${close}`;
+            };
+            return { html: roots.map((candidate) => serialize(candidate)).join('\n'), truncated };
           };
-          const html = serialize(root);
-          return { format, html, truncated, totalChars: html.length, url };
+          const complete = render(Infinity);
+          const bounded = complete.html.length > maxChars ? render(maxChars) : complete;
+          return { format, html: bounded.html, truncated: bounded.truncated, returnedChars: bounded.html.length, totalChars: complete.html.length, url, offset, matchedItems: allRoots.length, returnedItems: roots.length };
         }
-        if (format === 'interactive') {
+        if (format === 'interactive' || format === 'summary') {
           const seen = new Set();
-          const interactiveSelector =
-            'a[href], button, input, select, textarea, summary, [role], [contenteditable="true"], [onclick]';
-          const candidates = [
-            ...(root.matches?.(interactiveSelector) ? [root] : []),
-            ...root.querySelectorAll(interactiveSelector),
-          ];
+          const interactiveSelector = format === 'summary'
+            ? 'main,nav,aside,section,article,h1,h2,h3,h4,h5,h6,a[href],button,input,select,textarea,summary,[role],[contenteditable="true"],[onclick]'
+            : 'a[href],button,input,select,textarea,summary,[role],[contenteditable="true"],[onclick]';
+          const candidates = roots.flatMap((candidate) => [
+            ...(candidate.matches?.(interactiveSelector) ? [candidate] : []),
+            ...candidate.querySelectorAll(interactiveSelector),
+          ]);
           const items = [];
           let actionable = 0;
           for (const el of candidates) {
@@ -335,7 +403,8 @@ async function page(tabId, message) {
               'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'slider',
               'spinbutton', 'combobox', 'listbox', 'option', 'menuitem', 'switch', 'tab', 'treeitem',
             ]).has(role);
-            if (!actionableByTag && !el.isContentEditable && !el.hasAttribute('onclick') && !actionableRole) continue;
+            const summaryRole = format === 'summary' && ((role && role !== 'generic') || /^h[1-6]$/.test(tag));
+            if (!summaryRole && !actionableByTag && !el.isContentEditable && !el.hasAttribute('onclick') && !actionableRole) continue;
             actionable += 1;
             if (items.length >= 500) continue;
             const item = {
@@ -355,15 +424,28 @@ async function page(tabId, message) {
               item.value = clip(el.value).slice(0, 50);
             items.push(item);
           }
+          let returnedItems = items;
+          if (format === 'summary') {
+            const grouped = new Map();
+            for (const item of items) {
+              const key = JSON.stringify([item.role, item.name, item.tag, item.states ?? [], item.value ?? '']);
+              const existing = grouped.get(key);
+              if (existing) existing.count = (existing.count ?? 1) + 1;
+              else grouped.set(key, { ...item });
+            }
+            returnedItems = [...grouped.values()].slice(0, m.itemLimit ?? 100);
+          }
           return {
             format,
             url,
-            items,
-            truncated: actionable > items.length,
+            items: returnedItems,
+            truncated: actionable > items.length || returnedItems.length < (format === 'summary' ? new Set(items.map((item) => JSON.stringify([item.role, item.name, item.tag, item.states ?? [], item.value ?? '']))).size : items.length),
             totalItems: actionable,
+            offset,
+            matchedItems: allRoots.length,
+            returnedItems: roots.length,
           };
         }
-        // format === 'json'
         // format === 'json'
         const jsonNode = (el, depth = 0) => {
           const tag = el.tagName.toLowerCase();
@@ -396,7 +478,15 @@ async function page(tabId, message) {
           if (children.length) node.children = children;
           return node;
         };
-        return { format, url, node: jsonNode(root) };
+        const nodes = roots.map((candidate) => jsonNode(candidate)).filter(Boolean);
+        return {
+          format,
+          url,
+          node: nodes.length === 1 ? nodes[0] : nodes,
+          offset,
+          matchedItems: allRoots.length,
+          returnedItems: roots.length,
+        };
       }
       if (m.type === 'click') {
         element.click();
@@ -443,6 +533,17 @@ async function page(tabId, message) {
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
         return { ok: true, valueLength, verified: valueLength === m.text.length };
+      }
+      if (m.type === 'select') {
+        if (!(element instanceof HTMLSelectElement)) return 'element_not_selectable';
+        const option = m.value !== undefined
+          ? [...element.options].find((candidate) => candidate.value === m.value)
+          : [...element.options].find((candidate) => normalize(candidate.textContent) === normalize(m.optionText));
+        if (!option) return 'option_not_found';
+        element.value = option.value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        return { value: element.value, optionText: normalize(option.textContent), verified: element.value === option.value };
       }
     },
     args: [message],
@@ -504,6 +605,105 @@ async function nativePress(tabId, chord) {
   }
 }
 
+async function stitchedScreenshot(tabId, windowId, selector) {
+  const response = (await page(tabId, { type: 'screenshot_region', selector }))[0];
+  if (response?.error)
+    throw new Error(`page_world_error: ${response.error.message ?? String(response.error)}`);
+  if (response?.result === 'element_not_found') throw new Error('element_not_found');
+  const metrics = response?.result;
+  if (!metrics?.region || metrics.region.width <= 0 || metrics.region.height <= 0)
+    throw new Error('screenshot_region_empty');
+
+  const region = metrics.region;
+  const scale = metrics.devicePixelRatio || 1;
+  const outputWidth = Math.ceil(region.width * scale);
+  const outputHeight = Math.ceil(region.height * scale);
+  if (outputWidth > 32767 || outputHeight > 32767 || outputWidth * outputHeight > 268_000_000)
+    throw new Error('screenshot_too_large');
+  const canvas = new OffscreenCanvas(outputWidth, outputHeight);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('screenshot_canvas_unavailable');
+
+  const xStops = [];
+  const yStops = [];
+  for (let x = region.x; x < region.x + region.width; x += metrics.viewport.width) xStops.push(x);
+  for (let y = region.y; y < region.y + region.height; y += metrics.viewport.height) yStops.push(y);
+  try {
+    let tileIndex = 0;
+    for (const requestedY of yStops) {
+      for (const requestedX of xStops) {
+        if (tileIndex === 1 && !selector)
+          await page(tabId, { type: 'screenshot_sticky', hide: true });
+        const scrollResponse = (await page(tabId, {
+          type: 'screenshot_scroll',
+          x: Math.min(
+            Math.floor(requestedX / metrics.viewport.width) * metrics.viewport.width,
+            Math.max(0, metrics.document.width - metrics.viewport.width),
+          ),
+          y: Math.min(
+            Math.floor(requestedY / metrics.viewport.height) * metrics.viewport.height,
+            Math.max(0, metrics.document.height - metrics.viewport.height),
+          ),
+        }))[0];
+        if (scrollResponse?.error)
+          throw new Error(`page_world_error: ${scrollResponse.error.message ?? String(scrollResponse.error)}`);
+        await new Promise((resolve) => setTimeout(resolve, 550));
+        const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+        const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob());
+        const actual = scrollResponse.result;
+        const viewportScaleX = bitmap.width / metrics.viewport.width;
+        const viewportScaleY = bitmap.height / metrics.viewport.height;
+        const left = Math.max(region.x, actual.x);
+        const top = Math.max(region.y, actual.y);
+        const right = Math.min(region.x + region.width, actual.x + metrics.viewport.width);
+        const bottom = Math.min(region.y + region.height, actual.y + metrics.viewport.height);
+        if (right > left && bottom > top) {
+          context.drawImage(
+            bitmap,
+            (left - actual.x) * viewportScaleX,
+            (top - actual.y) * viewportScaleY,
+            (right - left) * viewportScaleX,
+            (bottom - top) * viewportScaleY,
+            (left - region.x) * scale,
+            (top - region.y) * scale,
+            (right - left) * scale,
+            (bottom - top) * scale,
+          );
+        }
+        bitmap.close();
+        tileIndex += 1;
+      }
+    }
+  } finally {
+    await page(tabId, { type: 'screenshot_sticky', hide: false }).catch(() => {});
+    await page(tabId, { type: 'screenshot_scroll', x: metrics.scroll.x, y: metrics.scroll.y }).catch(() => {});
+  }
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return { data: btoa(binary), mimeType: 'image/png', width: outputWidth, height: outputHeight };
+}
+
+async function tabObservation(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  const window = await chrome.windows.get(tab.windowId);
+  return { active: !!tab.active, windowFocused: !!window.focused };
+}
+
+async function waitForTab(tabId, condition, timeout) {
+  const started = performance.now();
+  let observed = await tabObservation(tabId);
+  while (performance.now() - started <= timeout) {
+    if ((condition === 'tab-active' && observed.active) || (condition === 'window-focused' && observed.windowFocused))
+      return { action: 'matched', condition, observed, elapsedMs: Math.round(performance.now() - started) };
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    observed = await tabObservation(tabId);
+  }
+  return { action: 'timeout', condition, observed, elapsedMs: Math.round(performance.now() - started) };
+}
+
 async function execute(message) {
   if (!state.tabId)
     return {
@@ -518,7 +718,13 @@ async function execute(message) {
   try {
     await chrome.tabs.get(state.tabId);
     let result;
-    if (message.type === 'press') {
+    if (message.type === 'wait' && (message.tabActive || message.windowFocused)) {
+      result = await waitForTab(
+        state.tabId,
+        message.tabActive ? 'tab-active' : 'window-focused',
+        message.timeout ?? 10_000,
+      );
+    } else if (message.type === 'press') {
       const injection = (await page(state.tabId, { ...message, type: 'focus' }))[0];
       if (injection?.error)
         throw new Error(`page_world_error: ${injection.error.message ?? String(injection.error)}`);
@@ -531,6 +737,7 @@ async function execute(message) {
       message.type === 'click' ||
       message.type === 'fill' ||
       message.type === 'type' ||
+      message.type === 'select' ||
       message.type === 'wait'
     ) {
       const injection = (await page(state.tabId, message))[0];
@@ -563,19 +770,32 @@ async function execute(message) {
       result = { url: current.url ?? message.url, title: current.title ?? null };
     } else if (message.type === 'screenshot') {
       const controlTab = await chrome.tabs.get(state.tabId);
+      if (message.waitForActive) {
+        const activeWait = await waitForTab(state.tabId, 'tab-active', message.waitForActive);
+        if (activeWait.action !== 'matched') throw new Error('paired_control_tab_not_active');
+      }
       const [activeTab] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
       if (activeTab?.id !== state.tabId)
         throw new Error(
           'paired_control_tab_not_active: refusing to capture a different active tab',
         );
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      const data = await chrome.tabs.captureVisibleTab(controlTab.windowId, { format: 'png' });
-      result = { data: data.split(',')[1] ?? '', mimeType: 'image/png', width: 0, height: 0 };
+      if (message.fullPage || message.selector) {
+        result = await stitchedScreenshot(state.tabId, controlTab.windowId, message.selector);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const data = await chrome.tabs.captureVisibleTab(controlTab.windowId, { format: 'png' });
+        const bitmap = await createImageBitmap(await (await fetch(data)).blob());
+        result = { data: data.split(',')[1] ?? '', mimeType: 'image/png', width: bitmap.width, height: bitmap.height };
+        bitmap.close();
+      }
     } else if (message.type === 'close') {
       state.session = null;
     }
     if (result === 'element_not_found') throw new Error('element_not_found');
     if (result === 'element_not_fillable') throw new Error('element_not_fillable');
+    if (result === 'element_not_selectable') throw new Error('element_not_selectable');
+    if (result === 'option_not_found') throw new Error('option_not_found');
+    if (typeof result === 'string' && result.startsWith('ambiguous_locator:')) throw new Error(result);
     return { reply: message.id, ok: true, result };
   } catch (error) {
     const description = String(error?.message ?? error);
@@ -585,7 +805,15 @@ async function execute(message) {
       error: {
         code: description.includes('element_not_found')
           ? 'element_not_found'
-          : description.includes('wait_timeout') || description.includes('navigation_timeout')
+          : description.includes('ambiguous_locator')
+            ? 'ambiguous_locator'
+            : description.includes('option_not_found')
+              ? 'option_not_found'
+              : description.includes('element_not_selectable')
+                ? 'element_not_selectable'
+                : description.includes('paired_control_tab_not_active')
+                  ? 'paired_tab_inactive'
+            : description.includes('wait_timeout') || description.includes('navigation_timeout')
             ? 'timeout'
             : 'adapter_error',
         message: description,
