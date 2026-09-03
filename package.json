@@ -14,11 +14,12 @@
     "extension:build": "bun scripts/build-extension.ts",
     "test": "bun test src",
     "dev": "BROWSER_CONTROLLER_COMMAND='bun run dev --' bun src/cli/index.ts",
-    "start": "bun run build && BROWSER_CONTROLLER_COMMAND='browserctl' bun dist/cli/index.js"
-    ,"supervisor": "bun src/cli/index.ts --internal-supervisor"
-    ,"fake-adapter": "bun src/adapters/fake-adapter.ts"
+    "start": "bun run build && BROWSER_CONTROLLER_COMMAND='browserctl' bun dist/cli/index.js",
+    "supervisor": "bun src/cli/index.ts --internal-supervisor",
+    "fake-adapter": "bun src/adapters/fake-adapter.ts"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {

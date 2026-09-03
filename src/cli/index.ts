@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { WebSocket } from 'ws';
+import { strToU8, zipSync } from 'fflate';
 import {
   discoveryPath,
   readDiscovery,
@@ -27,6 +28,7 @@ const KNOWN_FLAGS = new Set([
   '--offset', '--limit', '--within-selector', '--within-role', '--within-name', '--within-label', '--within-text', '--within-exact',
   '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
   '--url-glob', '--wait-navigation',
+  '--max-bytes', '--max-routes',
 ]);
 const invocation =
   process.env.BROWSER_CONTROLLER_COMMAND ??
@@ -199,6 +201,7 @@ function validateFlags() {
     navigate: ['--url', '--timeout'],
     dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit'],
     screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
+    scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes'],
     click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout'],
     press: [...locator, ...within, '--key', '--nth'],
     fill: [...locator, ...within, '--value', '--nth'],
@@ -301,6 +304,15 @@ function browserCommand(pairing: boolean): Command {
         fullPage: args.includes('--full-page'),
         waitForActive: numberValue('--wait-for-active'),
       };
+    case 'scrape':
+      return {
+        type: 'scrape',
+        session,
+        url: value('--url') ?? (args[1]?.startsWith('-') ? undefined : args[1]),
+        timeout: numberValue('--timeout'),
+        maxBytes: numberValue('--max-bytes'),
+        maxRoutes: numberValue('--max-routes'),
+      };
     case 'click':
       return { type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), waitNavigation: args.includes('--wait-navigation') || undefined, timeout: numberValue('--timeout') };
     case 'press': {
@@ -372,6 +384,7 @@ function usage(topic?: string) {
     wait: `usage: ${invocation} wait (LOCATOR | --url URL | --title TEXT | --evaluate EXPR) [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] [--session ID] [--json]\n\n${locator}\n\nLocator waits can require an exact match count, an exact field/text value, or a change from the value observed when waiting began. URL waits are exact; title matching is partial; evaluate expressions are polled until truthy.\n\nExamples:\n  ${invocation} wait --selector '.result' --count 3\n  ${invocation} wait --label Status --value Complete\n  ${invocation} wait --role log --changes\n  ${invocation} wait --evaluate "document.querySelectorAll('[class*=markdown]').length > 0" --timeout 20000`,
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
     screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
+    scrape: `usage: ${invocation} scrape [URL] [--output FILE.zip] [--max-routes N] [--max-bytes N] [--timeout MS] [--session ID] [--json]\n\nCaptures same-origin routes as rendered MHTML plus one viewport PNG per route. Defaults: 20 routes and 50 MB; hard limits: 50 routes and 100 MB.`,
     start: `usage: ${invocation} start [--name NAME] [--adapter ID] [--json]`,
     status: `usage: ${invocation} status [--json]\n       ${invocation} doctor [--json]`,
     list: `usage: ${invocation} list [--json]`,
@@ -393,6 +406,7 @@ Commands:
   wait             Wait for a locator or URL
   evaluate         Evaluate page-world JavaScript
   screenshot       Save a viewport, full-page, or element image
+  scrape           Capture same-origin routes into a ZIP
   list             List sessions
   start            Explicitly create or reconnect a session
   close            Close a session
@@ -425,7 +439,7 @@ async function main() {
   const autoStart =
     pairing ||
     effectiveCommand === 'start' ||
-    ['navigate', 'dom', 'screenshot', 'click', 'fill', 'type', 'select', 'press', 'wait', 'evaluate'].includes(
+    ['navigate', 'dom', 'screenshot', 'scrape', 'click', 'fill', 'type', 'select', 'press', 'wait', 'evaluate'].includes(
       effectiveCommand,
     );
   let ws: WebSocket;
@@ -456,6 +470,8 @@ async function main() {
           ? (request.timeout ?? 10_000) + 5_000
         : request.type === 'screenshot' && request.waitForActive
           ? request.waitForActive + 125_000
+          : request.type === 'scrape'
+            ? (request.timeout ?? 15_000) * (request.maxRoutes ?? 20) + 60_000
         : 15_000;
     const timer = setTimeout(() => reject(new Error('command timed out waiting for supervisor')), timeoutMs);
     const finish = (error?: Error) => {
@@ -526,6 +542,25 @@ async function main() {
           const bytes = Buffer.from(message.result.data, 'base64');
           writeFileSync(output, bytes);
           printResult('screenshot', { action: 'screenshot-saved', output, bytes: bytes.length });
+        } else if (command === 'scrape') {
+          const output = value('--output') ?? 'page-scrape.zip';
+          const result = message.result;
+          const metadata = {
+            url: result.url,
+            title: result.title,
+            capturedAt: result.capturedAt,
+            routes: result.routes,
+            capturedBytes: result.bytes,
+            format: 'Rendered MHTML snapshots with viewport screenshots',
+          };
+          const entries: Record<string, Uint8Array> = {
+            'metadata.json': strToU8(`${JSON.stringify(metadata, null, 2)}\n`),
+            'README.txt': strToU8('Open route .mhtml files in Chromium. Screenshots are viewport captures taken after each route loaded. The archive may contain page content visible to your browser; review it before sharing.\n'),
+          };
+          for (const file of result.files ?? []) entries[file.name] = Buffer.from(file.data, 'base64');
+          const archive = zipSync(entries, { level: 6 });
+          writeFileSync(output, archive);
+          printResult('scrape', { action: 'scrape-saved', output, bytes: archive.length, routes: result.routes });
         } else printResult(effectiveCommand, message.result ?? {});
         finish();
       } else if (message.error) {
@@ -589,6 +624,7 @@ function printResult(kind: string, result: any) {
     wait: `Matched ${result.condition ?? 'condition'} after ${result.elapsedMs ?? 0}ms.`,
     close: `Closed session ${result.session}.`,
     screenshot: `Saved screenshot to ${result.output} (${result.bytes} bytes).`,
+    scrape: `Saved ${result.routes} routes to ${result.output} (${result.bytes} bytes).`,
     'extension pair': `Paired. Control session: ${result.id}`,
   };
   console.log(messages[kind] ?? JSON.stringify(result, null, 2));

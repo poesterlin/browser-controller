@@ -40,6 +40,7 @@ browserctl wait --url URL [--timeout MS]
 browserctl wait --url-glob '**/karriere/**' [--timeout MS]
 browserctl evaluate --expression JAVASCRIPT
 browserctl screenshot [--full-page | --selector CSS] [--wait-for-active MS] --output FILE.png
+browserctl scrape [URL] --output page-scrape.zip [--max-routes 20] [--max-bytes 50000000]
 browserctl close
 ```
 
@@ -74,6 +75,8 @@ browserctl click --within-text Hardware-Basteln --role button --name Edit
 `dom --format summary` returns visible landmarks, headings, and controls, groups repeated items, and accepts `--item-limit`. A DOM locator can match repeated records; use `--offset` and `--limit` to retrieve a slice. Add zero-based `--nth` to choose one match; mutation commands reject ambiguous unindexed locators. Screenshot capture defaults to the viewport; full-page and selector captures scroll and stitch the active paired tab and restore its original position afterward. `--wait-for-active` waits for that tab instead of failing immediately.
 
 Summary links include their resolved `href`, and summary accounting distinguishes raw elements, unique groups, and returned groups. `click` automatically waits for native form submissions; use `--wait-navigation` when a non-submit control is also expected to navigate. URL waits accept either exact `--url` or `--url-glob` patterns where `*` stays within one path segment and `**` spans segments.
+
+`scrape` captures the requested page and discovered same-origin routes into one ZIP. Each route gets a rendered MHTML snapshot (including loaded assets) and a viewport PNG. Discovery strips query strings and fragments, never leaves the starting origin, and is bounded to 20 routes and 50 MB by default (hard limits: 50 routes and 100 MB). The archive can contain content visible to your signed-in browser; review it before sharing.
 
 `wait` accepts exactly one locator or `--url`. Locator waits default to `visible`. DOM output is limited to 50,000 characters by default; `--max-chars` accepts values up to 1,000,000 and reports when output was truncated.
 

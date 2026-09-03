@@ -42,6 +42,7 @@ browserctl wait --evaluate EXPR [--timeout MS] --json
 browserctl wait --tab-active [--timeout MS] --json
 browserctl evaluate --expression EXPR --json
 browserctl screenshot [--full-page | --selector CSS] [--wait-for-active MS] --output FILE.png --json
+browserctl scrape [URL] --output FILE.zip [--max-routes N] [--max-bytes N] --json
 browserctl close --json
 ```
 
@@ -76,6 +77,8 @@ DOM output has five formats via `--format` (default `clean_html`):
 `--max-chars` (1–1,000,000, default 50,000) bounds the output and truncation is reported, including `totalItems` for `interactive` and `summary`. `--text-chars` (default 100) controls per-node text clipping. `--depth` bounds `clean_html` and `json` tree depth. When a locator matches repeated records, `--offset` and `--limit` select a stable slice and the result reports matched and returned counts. Scope before raising limits. `evaluate` safely serializes objects, arrays, bigints, functions, and circular references; return structured values directly rather than wrapping them in `JSON.stringify`.
 
 Screenshots capture the active paired tab. The default captures its viewport. `--full-page` and `--selector CSS` scroll and stitch the full document or element, then restore the original scroll position. Pages with fixed or sticky content may show stitching artifacts.
+
+`scrape` navigates the active paired tab and creates a ZIP containing rendered MHTML plus a viewport PNG for each discovered same-origin route. It strips query strings and fragments from discovery and defaults to 20 routes/50 MB, with hard limits of 50 routes/100 MB. Treat archives as potentially private because MHTML includes content visible to the current browser session.
 
 Use `--json` for a stable `{ "ok": true, "result": ... }` result envelope. Mutation results name the completed action and relevant context, for example `navigated`, `clicked`, `filled`, or `closed`. Commands are protected against duplicate execution, but verify consequential site mutations from page state.
 
