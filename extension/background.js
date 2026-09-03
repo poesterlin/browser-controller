@@ -1,6 +1,7 @@
 import { CommandCache } from './command-cache.js';
 import { selectControlTab } from './control-tab.js';
 import { withTimeout } from './async.js';
+import { createScrapeArchive } from './scrape-archive.js';
 
 const state = {
   socket: null,
@@ -771,24 +772,28 @@ async function clickAndWait(tabId, message) {
 }
 
 async function navigateTab(tabId, url, timeout) {
-  const tab = await chrome.tabs.update(tabId, { url });
-  if (tab?.status === 'complete') return chrome.tabs.get(tabId);
+  const tab = await withTimeout(
+    chrome.tabs.update(tabId, { url }),
+    timeout,
+    'navigation_timeout',
+  );
+  if (tab?.status === 'complete')
+    return withTimeout(chrome.tabs.get(tabId), 2_000, 'tab_status_timeout');
   await new Promise((resolve, reject) => {
-    let settled = false;
+    let timer;
     const listener = (id, info) => {
       if (id !== tabId || info.status !== 'complete') return;
-      settled = true;
+      clearTimeout(timer);
       chrome.tabs.onUpdated.removeListener(listener);
       resolve();
     };
     chrome.tabs.onUpdated.addListener(listener);
-    setTimeout(() => {
-      if (settled) return;
+    timer = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       reject(new Error('navigation_timeout'));
     }, timeout);
   });
-  return chrome.tabs.get(tabId);
+  return withTimeout(chrome.tabs.get(tabId), 2_000, 'tab_status_timeout');
 }
 
 function bytesToBase64(bytes) {
@@ -817,7 +822,11 @@ async function captureMhtml(tabId) {
     );
     return new TextEncoder().encode(result.data);
   } finally {
-    await chrome.debugger.detach(target).catch(() => {});
+    await withTimeout(
+      chrome.debugger.detach(target),
+      5_000,
+      'scrape_debugger_detach_timeout',
+    ).catch(() => {});
   }
 }
 
@@ -878,8 +887,8 @@ async function scrapeRoutes(tabId, windowId, message) {
         break;
       }
       const name = routeName(url, seen.size - 1);
-      files.push({ name: `routes/${name}.mhtml`, data: bytesToBase64(mhtml) });
-      files.push({ name: `screenshots/${name}.png`, data: bytesToBase64(screenshot) });
+      files.push({ name: `routes/${name}.mhtml`, data: mhtml });
+      files.push({ name: `screenshots/${name}.png`, data: screenshot });
       totalBytes += nextBytes;
       const links = (await withTimeout(
         page(tabId, { type: 'scrape_links' }),
@@ -892,15 +901,24 @@ async function scrapeRoutes(tabId, windowId, message) {
           queue.push(candidate.href);
       }
     }
-    return {
-      files,
+    const metadata = {
       url: root.href,
       title: rootTitle,
       capturedAt: new Date().toISOString(),
-      bytes: totalBytes,
+      capturedBytes: totalBytes,
       routes: files.length / 2,
       skippedRoutes,
       deadlineReached: Date.now() >= deadline,
+    };
+    const archive = createScrapeArchive(files, {
+      ...metadata,
+      format: 'Rendered MHTML snapshots with viewport screenshots',
+    });
+    return {
+      ...metadata,
+      data: bytesToBase64(archive),
+      mimeType: 'application/zip',
+      bytes: archive.length,
     };
   } finally {
     await navigateTab(tabId, root.href, timeout).catch(() => {});

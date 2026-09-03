@@ -162,4 +162,68 @@ describe('CLI transport', () => {
     expect(stdout).toContain('fill LOCATOR --value VALUE');
     expect(stdout).toContain('--text TEXT');
   });
+
+  test('writes a scrape archive returned by the extension', async () => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'browserctl-cli-test-'));
+    const runtime = path.join(temp, 'browser-controller');
+    const output = path.join(temp, 'capture.zip');
+    await fs.mkdir(runtime, { recursive: true });
+    const token = 'a'.repeat(64);
+    const archive = Buffer.from('finished archive');
+    const http = await listeningServer();
+    const server = new WebSocketServer({ server: http });
+    cleanups.push(
+      () => new Promise<void>((resolve) => server.close(() => http.close(() => resolve()))),
+      () => fs.rm(temp, { recursive: true, force: true }),
+    );
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server address');
+    await fs.writeFile(
+      path.join(runtime, 'connection.json'),
+      JSON.stringify({ url: `ws://127.0.0.1:${address.port}`, pid: process.pid, token, version: 1 }),
+    );
+    server.on('connection', (socket) => {
+      socket.on('message', (raw) => {
+        const message = JSON.parse(raw.toString());
+        if (message.kind === 'hello')
+          socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: {} }));
+        else if (message.kind === 'command')
+          socket.send(JSON.stringify({
+            version: 1,
+            id: message.id,
+            ok: true,
+            result: {
+              data: archive.toString('base64'),
+              mimeType: 'application/zip',
+              routes: 3,
+              skippedRoutes: 1,
+              deadlineReached: false,
+            },
+          }));
+      });
+    });
+
+    const child = spawn(
+      process.execPath,
+      [path.join(import.meta.dir, 'index.ts'), 'scrape', '--output', output, '--json'],
+      { env: { ...process.env, XDG_RUNTIME_DIR: temp }, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let stdout = '';
+    child.stdout.on('data', (chunk) => (stdout += chunk));
+    const exitCode = await new Promise<number | null>((resolve) => child.once('close', resolve));
+
+    expect(exitCode).toBe(0);
+    expect(await fs.readFile(output)).toEqual(archive);
+    expect(JSON.parse(stdout)).toEqual({
+      ok: true,
+      result: {
+        action: 'scrape-saved',
+        output,
+        bytes: archive.length,
+        routes: 3,
+        skippedRoutes: 1,
+        deadlineReached: false,
+      },
+    });
+  });
 });

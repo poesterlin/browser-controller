@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { WebSocket } from 'ws';
-import { strToU8, zipSync } from 'fflate';
 import {
   discoveryPath,
   readDiscovery,
@@ -550,24 +549,18 @@ async function main() {
         } else if (command === 'scrape') {
           const output = value('--output') ?? 'page-scrape.zip';
           const result = message.result;
-          const metadata = {
-            url: result.url,
-            title: result.title,
-            capturedAt: result.capturedAt,
+          if (result.mimeType !== 'application/zip')
+            throw new Error(`unexpected scrape result type: ${result.mimeType ?? 'missing'}`);
+          const archive = Buffer.from(result.data, 'base64');
+          writeFileSync(output, archive);
+          printResult('scrape', {
+            action: 'scrape-saved',
+            output,
+            bytes: archive.length,
             routes: result.routes,
-            capturedBytes: result.bytes,
             skippedRoutes: result.skippedRoutes ?? 0,
             deadlineReached: result.deadlineReached ?? false,
-            format: 'Rendered MHTML snapshots with viewport screenshots',
-          };
-          const entries: Record<string, Uint8Array> = {
-            'metadata.json': strToU8(`${JSON.stringify(metadata, null, 2)}\n`),
-            'README.txt': strToU8('Open route .mhtml files in Chromium. Screenshots are viewport captures taken after each route loaded. The archive may contain page content visible to your browser; review it before sharing.\n'),
-          };
-          for (const file of result.files ?? []) entries[file.name] = Buffer.from(file.data, 'base64');
-          const archive = zipSync(entries, { level: 6 });
-          writeFileSync(output, archive);
-          printResult('scrape', { action: 'scrape-saved', output, bytes: archive.length, routes: result.routes });
+          });
         } else printResult(effectiveCommand, message.result ?? {});
         finish();
       } else if (message.error) {

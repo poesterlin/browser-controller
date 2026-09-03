@@ -150,11 +150,13 @@ export interface ScreenshotResult {
   height: number;
 }
 export interface ScrapeResult {
-  files: Array<{ name: string; data: string }>;
+  data: string;
+  mimeType: 'application/zip';
   url: string;
   title: string | null;
   capturedAt: string;
   bytes: number;
+  capturedBytes: number;
   routes: number;
   skippedRoutes?: number;
   deadlineReached?: boolean;

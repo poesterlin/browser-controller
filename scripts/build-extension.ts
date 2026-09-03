@@ -8,10 +8,6 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 for (const file of [
   'manifest.json',
-  'command-cache.js',
-  'control-tab.js',
-  'async.js',
-  'background.js',
   'content.js',
   'options.html',
   'options.js',
@@ -20,4 +16,12 @@ for (const file of [
 ]) {
   await cp(path.join(source, file), path.join(output, file));
 }
+const build = await Bun.build({
+  entrypoints: [path.join(source, 'background.js')],
+  outdir: output,
+  target: 'browser',
+  format: 'esm',
+  naming: 'background.js',
+});
+if (!build.success) throw new AggregateError(build.logs, 'Could not bundle extension background worker');
 console.log(`Built unpacked extension: ${output}`);

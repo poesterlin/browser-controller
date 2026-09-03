@@ -6,7 +6,7 @@ const fake = (): BrowserSession => ({
   capabilities: () => [],
   navigate: async () => {},
     screenshot: async () => ({ data: '', mimeType: 'image/png', width: 0, height: 0 }),
-    scrape: async () => ({ files: [], url: '', title: null, capturedAt: '', bytes: 0, routes: 0 }),
+    scrape: async () => ({ data: '', mimeType: 'application/zip', url: '', title: null, capturedAt: '', bytes: 0, capturedBytes: 0, routes: 0 }),
   dom: async () => ({ format: 'clean_html', html: '' }),
   click: async () => {},
   press: async () => {},
