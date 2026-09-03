@@ -1035,23 +1035,23 @@ async function connect(values) {
   state.adapterId = values.adapterId;
 }
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId !== state.controlTabId) return;
+function resetNativeState() {
   state.controlTabId = null;
   state.pairingTabId = null;
   state.tabId = null;
   chrome.storage.local.remove(['controlTabId']).catch(() => {});
   chrome.storage.session.remove(['tabId']).catch(() => {});
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId !== state.controlTabId) return;
+  resetNativeState();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   // Chromium can reuse tab IDs after a browser restart. Require a fresh explicit
   // pairing instead of risking control of an unrelated tab with a recycled ID.
-  state.controlTabId = null;
-  state.pairingTabId = null;
-  state.tabId = null;
-  chrome.storage.local.remove(['controlTabId']).catch(() => {});
-  chrome.storage.session.remove(['tabId']).catch(() => {});
+  resetNativeState();
 });
 
 chrome.storage.local

@@ -1,4 +1,11 @@
-import type { Capability, DomFormat, DomResult, EvaluateResult, Locator, ScreenshotResult } from './protocol/index.js';
+import type {
+  Capability,
+  DomFormat,
+  DomResult,
+  EvaluateResult,
+  Locator,
+  ScreenshotResult,
+} from './protocol/index.js';
 export interface ScreenshotOptions {
   fullPage?: boolean;
   selector?: string;
@@ -62,14 +69,15 @@ export class QueuedSession {
   state: SessionState = 'starting';
   private tail = Promise.resolve();
   private closed = false;
-  readonly created = Date.now();
   readonly deadline: ReturnType<typeof setTimeout>;
+  readonly deadlineAt: number;
   constructor(
     public readonly id: string,
     public readonly name: string | undefined,
     public readonly adapter: BrowserSession,
     lifetimeMs = 300_000,
   ) {
+    this.deadlineAt = Date.now() + lifetimeMs;
     this.deadline = setTimeout(() => {
       void this.close('session deadline');
     }, lifetimeMs);

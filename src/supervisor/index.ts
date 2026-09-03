@@ -289,7 +289,7 @@ export class Supervisor {
             id: session.id,
             name: session.name ?? null,
             state: session.state,
-            expiresAt: new Date(session.created + 300_000).toISOString(),
+            expiresAt: new Date(session.deadlineAt).toISOString(),
           })),
           recovery: needsPairing ? 'run browserctl extension pair' : null,
         });
