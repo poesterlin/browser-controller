@@ -1,4 +1,4 @@
-import { strToU8, zipSync } from 'fflate';
+import { strToU8, zipSync } from './vendor/fflate.js';
 
 const README =
   'Open route .mhtml files in Chromium. Screenshots are viewport captures taken after each route loaded. The archive may contain page content visible to your browser; review it before sharing.\n';
