@@ -20,4 +20,13 @@ describe('extension command cache', () => {
     expect(duplicate).toEqual(first);
     expect(executions).toBe(1);
   });
+
+  test('allows command IDs to run again after a session reset', async () => {
+    const cache = new CommandCache();
+    let calls = 0;
+    await cache.run('same-id', async () => ++calls);
+    cache.clear();
+    await cache.run('same-id', async () => ++calls);
+    expect(calls).toBe(2);
+  });
 });
