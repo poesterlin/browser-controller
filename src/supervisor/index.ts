@@ -361,8 +361,11 @@ export class Supervisor {
           case 'click':
             {
               const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
-              await s.adapter.click(locator, c.within, c.nth);
-              return { action: 'clicked', locator, ...(c.within ? { within: c.within } : {}), ...(c.nth !== undefined ? { nth: c.nth } : {}) };
+              const clickResult = await s.adapter.click(locator, c.within, c.nth, {
+                waitNavigation: c.waitNavigation,
+                timeout: c.timeout,
+              });
+              return { action: 'clicked', locator, ...(c.within ? { within: c.within } : {}), ...(c.nth !== undefined ? { nth: c.nth } : {}), ...((clickResult as object) ?? {}) };
             }
           case 'press':
             {
@@ -426,6 +429,8 @@ export class Supervisor {
       },
       c.type === 'wait' || c.type === 'navigate'
         ? (c.timeout ?? 10_000) + 1_000
+        : c.type === 'click'
+          ? (c.timeout ?? 10_000) + 1_000
         : c.type === 'screenshot' && (c.fullPage || c.selector)
           ? 120_000 + (c.waitForActive ?? 0)
           : c.type === 'screenshot' && c.waitForActive
@@ -552,7 +557,7 @@ function makeExtensionSession(
     navigate: (u, timeout) => call('navigate', { url: u, timeout }),
     screenshot: (o) => call('screenshot', o),
     dom: (o) => call('dom', o),
-    click: (locator, within, nth) => call('click', { locator, within, nth }),
+    click: (locator, within, nth, options) => call('click', { locator, within, nth, ...options }),
     press: (locator, key, within, nth) => call('press', { locator, key, within, nth }),
     fill: (locator, text, within, nth) => call('fill', { locator, text, within, nth }),
     select: (locator, options) => call('select', { locator, ...options }),

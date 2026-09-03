@@ -216,4 +216,28 @@ describe('protocol validation', () => {
       }),
     ).toMatchObject({ code: 'invalid_request' });
   });
+  test('accepts URL globs and navigation-aware clicks', () => {
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'glob',
+        kind: 'command',
+        command: { type: 'wait', session: 's', urlGlob: '**/karriere/**', timeout: 5000 },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'click-navigation',
+        kind: 'command',
+        command: {
+          type: 'click',
+          session: 's',
+          locator: { by: 'role', value: 'button', name: 'Submit' },
+          waitNavigation: true,
+          timeout: 5000,
+        },
+      }).ok,
+    ).toBe(true);
+  });
 });

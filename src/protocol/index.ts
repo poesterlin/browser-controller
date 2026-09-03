@@ -39,7 +39,16 @@ export type Command =
       nth?: number;
       itemLimit?: number;
     }
-  | { type: 'click'; session: string; locator?: Locator; selector?: string; within?: Locator; nth?: number }
+  | {
+      type: 'click';
+      session: string;
+      locator?: Locator;
+      selector?: string;
+      within?: Locator;
+      nth?: number;
+      waitNavigation?: boolean;
+      timeout?: number;
+    }
   | {
       type: 'press';
       session: string;
@@ -75,6 +84,7 @@ export type Command =
       locator?: Locator;
       selector?: string;
       url?: string;
+      urlGlob?: string;
       text?: string;
       title?: string;
       evaluate?: string;
@@ -138,6 +148,7 @@ export interface DomInteractiveItem {
   value?: string;
   states?: string[];
   count?: number;
+  href?: string;
 }
 export interface DomResult {
   format: DomFormat;
@@ -152,6 +163,9 @@ export interface DomResult {
   offset?: number;
   matchedItems?: number;
   returnedItems?: number;
+  rawItems?: number;
+  uniqueItems?: number;
+  scopeMatches?: number;
 }
 export interface EvaluateResult {
   value: unknown;
@@ -230,7 +244,7 @@ export function validateEnvelope(
   if (type === 'navigate' && !required('url'))
     return { ok: false, code: 'invalid_request', message: 'url is required' };
   if (
-    (type === 'navigate' || type === 'wait') &&
+    (type === 'navigate' || type === 'wait' || type === 'click') &&
     c.timeout !== undefined &&
     (typeof c.timeout !== 'number' ||
       !Number.isInteger(c.timeout) ||
@@ -316,6 +330,8 @@ export function validateEnvelope(
       return { ok: false, code: 'invalid_request', message: 'title must be a string' };
     if (c.evaluate !== undefined && !string(c.evaluate))
       return { ok: false, code: 'invalid_request', message: 'evaluate must be a string' };
+    if (c.urlGlob !== undefined && !string(c.urlGlob))
+      return { ok: false, code: 'invalid_request', message: 'urlGlob must be a string' };
     if (
       c.count !== undefined &&
       (typeof c.count !== 'number' || !Number.isInteger(c.count) || c.count < 0 || c.count > 100_000)
@@ -329,6 +345,7 @@ export function validateEnvelope(
       locator(c.locator) ? 'locator' : undefined,
       required('selector') ? 'selector' : undefined,
       required('url') ? 'url' : undefined,
+      required('urlGlob') ? 'urlGlob' : undefined,
       required('text') ? 'text' : undefined,
       required('title') ? 'title' : undefined,
       required('evaluate') ? 'evaluate' : undefined,
@@ -351,6 +368,8 @@ export function validateEnvelope(
     if (c.state !== undefined && conditions[0] !== 'locator' && conditions[0] !== 'selector')
       return { ok: false, code: 'invalid_request', message: 'wait state requires a locator' };
   }
+  if (type === 'click' && c.waitNavigation !== undefined && typeof c.waitNavigation !== 'boolean')
+    return { ok: false, code: 'invalid_request', message: 'waitNavigation must be a boolean' };
   return {
     ok: true,
     value: { version: PROTOCOL_VERSION, id: input.id, kind: 'command', command: c as Command },

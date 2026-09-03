@@ -152,8 +152,8 @@ async function page(tabId, message) {
             : undefined);
       const findAll = (target, root = document) => {
         if (!target) return [];
-        const candidates = [...root.querySelectorAll('*')];
-        if (target.by === 'css') return [...root.querySelectorAll(target.value)];
+        const candidates = [...(root instanceof Element ? [root] : []), ...root.querySelectorAll('*')];
+        if (target.by === 'css') return candidates.filter((candidate) => candidate.matches(target.value));
         if (target.by === 'label') {
           const label = [...root.querySelectorAll('label')].find((candidate) =>
             matches(candidate.textContent, target.value, target.exact),
@@ -205,6 +205,10 @@ async function page(tabId, message) {
         return m.nth === undefined ? elements : elements.slice(m.nth, m.nth + 1);
       };
       const locate = () => locateAll()[0] ?? null;
+      const globMatches = (input, glob) => {
+        const escaped = String(glob).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*');
+        return new RegExp(`^${escaped}$`).test(input);
+      };
       const visible = (element) =>
         !!element &&
         element.getClientRects().length > 0 &&
@@ -227,6 +231,8 @@ async function page(tabId, message) {
           const waitState = m.state ?? 'visible';
           const matched = m.url
             ? location.href === new URL(m.url, location.href).href
+            : m.urlGlob
+              ? globMatches(location.href, m.urlGlob)
             : m.title
               ? matches(document.title, m.title)
               : m.evaluate
@@ -248,6 +254,8 @@ async function page(tabId, message) {
               action: 'matched',
               condition: m.url
                 ? 'url'
+                : m.urlGlob
+                  ? 'url-glob'
                 : m.title
                   ? 'title'
                   : m.evaluate
@@ -275,7 +283,7 @@ async function page(tabId, message) {
         const elements = locateAll();
         return {
           action: 'timeout',
-          condition: m.url ? 'url' : m.title ? 'title' : m.evaluate ? 'evaluate' : locator?.by ?? (m.tabActive ? 'tab-active' : 'window-focused'),
+          condition: m.url ? 'url' : m.urlGlob ? 'url-glob' : m.title ? 'title' : m.evaluate ? 'evaluate' : locator?.by ?? (m.tabActive ? 'tab-active' : 'window-focused'),
           state: m.state,
           locator,
           observed: {
@@ -289,6 +297,11 @@ async function page(tabId, message) {
       }
 
       const element = locate();
+      const scopeMatches = m.within ? findAll(m.within).length : undefined;
+      if (['click', 'focus', 'fill', 'type', 'select'].includes(m.type) && m.within && scopeMatches === 0)
+        return 'scope_not_found';
+      if (['click', 'focus', 'fill', 'type', 'select'].includes(m.type) && m.within && scopeMatches > 1)
+        return `ambiguous_scope:${scopeMatches}`;
       if (['click', 'focus', 'fill', 'type', 'select'].includes(m.type) && m.nth === undefined && rawLocateAll().length > 1)
         return `ambiguous_locator:${rawLocateAll().length}`;
       if (locator && !element) return 'element_not_found';
@@ -322,6 +335,7 @@ async function page(tabId, message) {
             offset,
             matchedItems: allRoots.length,
             returnedItems: roots.length,
+            ...(scopeMatches !== undefined ? { scopeMatches } : {}),
           };
         }
         const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'head']);
@@ -376,7 +390,7 @@ async function page(tabId, message) {
           };
           const complete = render(Infinity);
           const bounded = complete.html.length > maxChars ? render(maxChars) : complete;
-          return { format, html: bounded.html, truncated: bounded.truncated, returnedChars: bounded.html.length, totalChars: complete.html.length, url, offset, matchedItems: allRoots.length, returnedItems: roots.length };
+          return { format, html: bounded.html, truncated: bounded.truncated, returnedChars: bounded.html.length, totalChars: complete.html.length, url, offset, matchedItems: allRoots.length, returnedItems: roots.length, ...(scopeMatches !== undefined ? { scopeMatches } : {}) };
         }
         if (format === 'interactive' || format === 'summary') {
           const seen = new Set();
@@ -413,6 +427,7 @@ async function page(tabId, message) {
               tag,
             };
             if (el.id) item.css = `#${CSS.escape(el.id)}`;
+            if (el instanceof HTMLAnchorElement && el.href) item.href = el.href;
             const states = [];
             if (el.disabled || el.getAttribute('aria-disabled') === 'true') states.push('disabled');
             if (el.getAttribute('aria-expanded') === 'true') states.push('expanded');
@@ -428,7 +443,7 @@ async function page(tabId, message) {
           if (format === 'summary') {
             const grouped = new Map();
             for (const item of items) {
-              const key = JSON.stringify([item.role, item.name, item.tag, item.states ?? [], item.value ?? '']);
+              const key = JSON.stringify([item.role, item.name, item.tag, item.states ?? [], item.value ?? '', item.href ?? '']);
               const existing = grouped.get(key);
               if (existing) existing.count = (existing.count ?? 1) + 1;
               else grouped.set(key, { ...item });
@@ -439,11 +454,14 @@ async function page(tabId, message) {
             format,
             url,
             items: returnedItems,
-            truncated: actionable > items.length || returnedItems.length < (format === 'summary' ? new Set(items.map((item) => JSON.stringify([item.role, item.name, item.tag, item.states ?? [], item.value ?? '']))).size : items.length),
+            truncated: actionable > items.length || returnedItems.length < (format === 'summary' ? new Set(items.map((item) => JSON.stringify([item.role, item.name, item.tag, item.states ?? [], item.value ?? '', item.href ?? '']))).size : items.length),
+            rawItems: actionable,
+            uniqueItems: format === 'summary' ? new Set(items.map((item) => JSON.stringify([item.role, item.name, item.tag, item.states ?? [], item.value ?? '', item.href ?? '']))).size : items.length,
             totalItems: actionable,
             offset,
             matchedItems: allRoots.length,
             returnedItems: roots.length,
+            ...(scopeMatches !== undefined ? { scopeMatches } : {}),
           };
         }
         // format === 'json'
@@ -490,7 +508,8 @@ async function page(tabId, message) {
       }
       if (m.type === 'click') {
         element.click();
-        return 'ok';
+        const submit = element instanceof HTMLButtonElement && (element.type === 'submit' || !!element.form);
+        return { ok: true, submissionExpected: submit, url: location.href };
       }
       if (m.type === 'focus') {
         element.focus();
@@ -704,6 +723,36 @@ async function waitForTab(tabId, condition, timeout) {
   return { action: 'timeout', condition, observed, elapsedMs: Math.round(performance.now() - started) };
 }
 
+async function clickAndWait(tabId, message) {
+  let completed = false;
+  let resolveNavigation;
+  const navigation = new Promise((resolve) => (resolveNavigation = resolve));
+  const listener = (id, info) => {
+    if (id === tabId && info.status === 'complete') {
+      completed = true;
+      resolveNavigation(true);
+    }
+  };
+  chrome.tabs.onUpdated.addListener(listener);
+  try {
+    const injection = (await page(tabId, message))[0];
+    if (injection?.error)
+      throw new Error(`page_world_error: ${injection.error.message ?? String(injection.error)}`);
+    const result = injection?.result;
+    if (typeof result === 'string') return result;
+    const shouldWait = message.waitNavigation || result?.submissionExpected;
+    if (!shouldWait) return result;
+    const navigated = completed || await Promise.race([
+      navigation,
+      new Promise((resolve) => setTimeout(() => resolve(false), message.timeout ?? 10_000)),
+    ]);
+    if (!navigated && message.waitNavigation) throw new Error('navigation_timeout');
+    return { ...result, navigationWaited: true, navigated, url: (await chrome.tabs.get(tabId)).url };
+  } finally {
+    chrome.tabs.onUpdated.removeListener(listener);
+  }
+}
+
 async function execute(message) {
   if (!state.tabId)
     return {
@@ -724,6 +773,8 @@ async function execute(message) {
         message.tabActive ? 'tab-active' : 'window-focused',
         message.timeout ?? 10_000,
       );
+    } else if (message.type === 'click') {
+      result = await clickAndWait(state.tabId, message);
     } else if (message.type === 'press') {
       const injection = (await page(state.tabId, { ...message, type: 'focus' }))[0];
       if (injection?.error)
@@ -734,7 +785,6 @@ async function execute(message) {
     } else if (
       message.type === 'evaluate' ||
       message.type === 'dom' ||
-      message.type === 'click' ||
       message.type === 'fill' ||
       message.type === 'type' ||
       message.type === 'select' ||
@@ -796,6 +846,7 @@ async function execute(message) {
     if (result === 'element_not_selectable') throw new Error('element_not_selectable');
     if (result === 'option_not_found') throw new Error('option_not_found');
     if (typeof result === 'string' && result.startsWith('ambiguous_locator:')) throw new Error(result);
+    if (typeof result === 'string' && (result.startsWith('ambiguous_scope:') || result === 'scope_not_found')) throw new Error(result);
     return { reply: message.id, ok: true, result };
   } catch (error) {
     const description = String(error?.message ?? error);
@@ -807,6 +858,10 @@ async function execute(message) {
           ? 'element_not_found'
           : description.includes('ambiguous_locator')
             ? 'ambiguous_locator'
+            : description.includes('ambiguous_scope')
+              ? 'ambiguous_scope'
+              : description.includes('scope_not_found')
+                ? 'scope_not_found'
             : description.includes('option_not_found')
               ? 'option_not_found'
               : description.includes('element_not_selectable')

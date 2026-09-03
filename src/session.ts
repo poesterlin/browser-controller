@@ -24,6 +24,7 @@ export interface WaitOptions {
   locator?: Locator;
   selector?: string;
   url?: string;
+  urlGlob?: string;
   text?: string;
   title?: string;
   evaluate?: string;
@@ -42,7 +43,7 @@ export interface BrowserSession {
   navigate(url: string, timeout?: number): Promise<unknown>;
   screenshot(options: ScreenshotOptions): Promise<ScreenshotResult>;
   dom(options: DomOptions): Promise<DomResult>;
-  click(locator: Locator, within?: Locator, nth?: number): Promise<unknown>;
+  click(locator: Locator, within?: Locator, nth?: number, options?: { waitNavigation?: boolean; timeout?: number }): Promise<unknown>;
   press(locator: Locator, key: string, within?: Locator, nth?: number): Promise<unknown>;
   fill(locator: Locator, text: string, within?: Locator, nth?: number): Promise<unknown>;
   select(locator: Locator, options: { value?: string; optionText?: string; within?: Locator; nth?: number }): Promise<unknown>;
