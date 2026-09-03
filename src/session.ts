@@ -2,6 +2,7 @@ import type { Capability, DomFormat, DomResult, EvaluateResult, Locator, Screens
 export interface ScreenshotOptions {
   fullPage?: boolean;
   selector?: string;
+  waitForActive?: number;
 }
 export interface DomOptions {
   locator?: Locator;
@@ -10,6 +11,11 @@ export interface DomOptions {
   format?: DomFormat;
   textChars?: number;
   depth?: number;
+  offset?: number;
+  limit?: number;
+  within?: Locator;
+  nth?: number;
+  itemLimit?: number;
 }
 export interface TypeOptions {
   delay?: number;
@@ -26,15 +32,20 @@ export interface WaitOptions {
   changes?: boolean;
   state?: 'attached' | 'visible' | 'hidden';
   timeout?: number;
+  within?: Locator;
+  nth?: number;
+  tabActive?: boolean;
+  windowFocused?: boolean;
 }
 export interface BrowserSession {
   capabilities(): readonly Capability[];
   navigate(url: string, timeout?: number): Promise<unknown>;
   screenshot(options: ScreenshotOptions): Promise<ScreenshotResult>;
   dom(options: DomOptions): Promise<DomResult>;
-  click(locator: Locator): Promise<unknown>;
-  press(locator: Locator, key: string): Promise<unknown>;
-  fill(locator: Locator, text: string): Promise<unknown>;
+  click(locator: Locator, within?: Locator, nth?: number): Promise<unknown>;
+  press(locator: Locator, key: string, within?: Locator, nth?: number): Promise<unknown>;
+  fill(locator: Locator, text: string, within?: Locator, nth?: number): Promise<unknown>;
+  select(locator: Locator, options: { value?: string; optionText?: string; within?: Locator; nth?: number }): Promise<unknown>;
   wait(options: WaitOptions): Promise<unknown>;
   evaluate(expression: string): Promise<EvaluateResult>;
   close(reason: string): Promise<void>;

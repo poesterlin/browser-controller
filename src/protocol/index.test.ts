@@ -130,6 +130,27 @@ describe('protocol validation', () => {
         },
       }),
     ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scoped',
+        kind: 'command',
+        command: {
+          type: 'click',
+          session: 's',
+          locator: { by: 'role', value: 'button', name: 'Edit' },
+          within: { by: 'text', value: 'Hardware-Basteln', exact: true },
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'page',
+        kind: 'command',
+        command: { type: 'dom', session: 's', format: 'summary', offset: 10, limit: 25 },
+      }).ok,
+    ).toBe(true);
   });
   test('accepts status and validates navigation timeout', () => {
     expect(
@@ -146,6 +167,52 @@ describe('protocol validation', () => {
         id: 'navigate',
         kind: 'command',
         command: { type: 'navigate', session: 'last', url: 'https://example.com', timeout: 0 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+  });
+  test('validates active waits, selection, indexing, and summary limits', () => {
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'active',
+        kind: 'command',
+        command: { type: 'wait', session: 's', tabActive: true, timeout: 5000 },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'select',
+        kind: 'command',
+        command: {
+          type: 'select',
+          session: 's',
+          locator: { by: 'label', value: 'Kind' },
+          value: 'atom',
+          nth: 0,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'bad-select',
+        kind: 'command',
+        command: {
+          type: 'select',
+          session: 's',
+          locator: { by: 'label', value: 'Kind' },
+          value: 'atom',
+          optionText: 'Atom',
+        },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'bad-limit',
+        kind: 'command',
+        command: { type: 'dom', session: 's', format: 'summary', itemLimit: 501 },
       }),
     ).toMatchObject({ code: 'invalid_request' });
   });

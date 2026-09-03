@@ -8,6 +8,7 @@ export type Capability =
   | 'wait'
   | 'evaluate'
   | 'press'
+  | 'select'
   | 'screenshot.viewport'
   | 'screenshot.fullPage'
   | 'screenshot.element';
@@ -22,22 +23,52 @@ export type Command =
   | { type: 'list' }
   | { type: 'status' }
   | { type: 'navigate'; session: string; url: string; timeout?: number }
-  | { type: 'screenshot'; session: string; fullPage?: boolean; selector?: string }
+  | { type: 'screenshot'; session: string; fullPage?: boolean; selector?: string; waitForActive?: number }
   | {
       type: 'dom';
       session: string;
       locator?: Locator;
       selector?: string;
       maxChars?: number;
-      format?: 'interactive' | 'clean_html' | 'json' | 'html';
+      format?: 'interactive' | 'summary' | 'clean_html' | 'json' | 'html';
       textChars?: number;
       depth?: number;
+      offset?: number;
+      limit?: number;
+      within?: Locator;
+      nth?: number;
+      itemLimit?: number;
     }
-  | { type: 'click'; session: string; locator?: Locator; selector?: string }
-  | { type: 'press'; session: string; locator?: Locator; selector?: string; key: string }
-  | { type: 'fill'; session: string; locator?: Locator; selector?: string; text: string }
+  | { type: 'click'; session: string; locator?: Locator; selector?: string; within?: Locator; nth?: number }
+  | {
+      type: 'press';
+      session: string;
+      locator?: Locator;
+      selector?: string;
+      within?: Locator;
+      nth?: number;
+      key: string;
+    }
+  | {
+      type: 'fill';
+      session: string;
+      locator?: Locator;
+      selector?: string;
+      within?: Locator;
+      nth?: number;
+      text: string;
+    }
   /** @deprecated Use fill. Type now has fill semantics for compatibility. */
-  | { type: 'type'; session: string; locator?: Locator; selector?: string; text: string; delay?: number }
+  | {
+      type: 'type';
+      session: string;
+      locator?: Locator;
+      selector?: string;
+      within?: Locator;
+      nth?: number;
+      text: string;
+      delay?: number;
+    }
   | {
       type: 'wait';
       session: string;
@@ -52,6 +83,20 @@ export type Command =
       changes?: boolean;
       state?: 'attached' | 'visible' | 'hidden';
       timeout?: number;
+      within?: Locator;
+      nth?: number;
+      tabActive?: boolean;
+      windowFocused?: boolean;
+    }
+  | {
+      type: 'select';
+      session: string;
+      locator?: Locator;
+      selector?: string;
+      within?: Locator;
+      nth?: number;
+      value?: string;
+      optionText?: string;
     }
   | { type: 'evaluate'; session: string; expression: string }
   | { type: 'close'; session: string; reason?: string };
@@ -84,7 +129,7 @@ export interface ScreenshotResult {
   width: number;
   height: number;
 }
-export type DomFormat = 'interactive' | 'clean_html' | 'json' | 'html';
+export type DomFormat = 'interactive' | 'summary' | 'clean_html' | 'json' | 'html';
 export interface DomInteractiveItem {
   role: string;
   name: string;
@@ -92,6 +137,7 @@ export interface DomInteractiveItem {
   css?: string;
   value?: string;
   states?: string[];
+  count?: number;
 }
 export interface DomResult {
   format: DomFormat;
@@ -101,7 +147,11 @@ export interface DomResult {
   node?: unknown;
   truncated?: boolean;
   totalChars?: number;
+  returnedChars?: number;
   totalItems?: number;
+  offset?: number;
+  matchedItems?: number;
+  returnedItems?: number;
 }
 export interface EvaluateResult {
   value: unknown;
@@ -160,6 +210,7 @@ export function validateEnvelope(
       'dom',
       'click',
       'press',
+      'select',
       'fill',
       'type',
       'wait',
@@ -187,6 +238,11 @@ export function validateEnvelope(
       c.timeout > 120_000)
   )
     return { ok: false, code: 'invalid_request', message: 'timeout must be between 1 and 120000' };
+  if (
+    c.waitForActive !== undefined &&
+    (typeof c.waitForActive !== 'number' || !Number.isInteger(c.waitForActive) || c.waitForActive < 1 || c.waitForActive > 120_000)
+  )
+    return { ok: false, code: 'invalid_request', message: 'waitForActive must be between 1 and 120000' };
   if ((type === 'dom' || type === 'screenshot') && c.selector !== undefined && !string(c.selector))
     return { ok: false, code: 'invalid_request', message: 'selector must be a string' };
   if (type === 'press' && (!string(c.key) || c.key.length === 0))
@@ -195,6 +251,8 @@ export function validateEnvelope(
     return { ok: false, code: 'invalid_request', message: 'locator is required' };
   if (c.locator !== undefined && !locator(c.locator))
     return { ok: false, code: 'invalid_request', message: 'invalid locator' };
+  if (c.within !== undefined && !locator(c.within))
+    return { ok: false, code: 'invalid_request', message: 'invalid within locator' };
   if (locator(c.locator) && required('selector'))
     return { ok: false, code: 'invalid_request', message: 'use locator or selector, not both' };
   if (
@@ -216,12 +274,12 @@ export function validateEnvelope(
     return { ok: false, code: 'invalid_request', message: 'maxChars must be between 1 and 1000000' };
   if (
     c.format !== undefined &&
-    !['interactive', 'clean_html', 'json', 'html'].includes(String(c.format))
+    !['interactive', 'summary', 'clean_html', 'json', 'html'].includes(String(c.format))
   )
     return {
       ok: false,
       code: 'invalid_request',
-      message: 'format must be interactive, clean_html, json, or html',
+      message: 'format must be interactive, summary, clean_html, json, or html',
     };
   if (
     c.textChars !== undefined &&
@@ -233,6 +291,26 @@ export function validateEnvelope(
     (typeof c.depth !== 'number' || !Number.isInteger(c.depth) || c.depth < 1 || c.depth > 100)
   )
     return { ok: false, code: 'invalid_request', message: 'depth must be between 1 and 100' };
+  if (
+    c.offset !== undefined &&
+    (typeof c.offset !== 'number' || !Number.isInteger(c.offset) || c.offset < 0)
+  )
+    return { ok: false, code: 'invalid_request', message: 'offset must be a non-negative integer' };
+  if (
+    c.limit !== undefined &&
+    (typeof c.limit !== 'number' || !Number.isInteger(c.limit) || c.limit < 1 || c.limit > 500)
+  )
+    return { ok: false, code: 'invalid_request', message: 'limit must be between 1 and 500' };
+  if (c.nth !== undefined && (typeof c.nth !== 'number' || !Number.isInteger(c.nth) || c.nth < 0))
+    return { ok: false, code: 'invalid_request', message: 'nth must be a non-negative integer' };
+  if (c.itemLimit !== undefined && (typeof c.itemLimit !== 'number' || !Number.isInteger(c.itemLimit) || c.itemLimit < 1 || c.itemLimit > 500))
+    return { ok: false, code: 'invalid_request', message: 'itemLimit must be between 1 and 500' };
+  if (type === 'select') {
+    if (!required('selector') && !locator(c.locator))
+      return { ok: false, code: 'invalid_request', message: 'locator is required' };
+    if ((string(c.value) ? 1 : 0) + (string(c.optionText) ? 1 : 0) !== 1)
+      return { ok: false, code: 'invalid_request', message: 'select requires exactly one value or optionText' };
+  }
   if (type === 'wait') {
     if (c.title !== undefined && !string(c.title))
       return { ok: false, code: 'invalid_request', message: 'title must be a string' };
@@ -254,6 +332,8 @@ export function validateEnvelope(
       required('text') ? 'text' : undefined,
       required('title') ? 'title' : undefined,
       required('evaluate') ? 'evaluate' : undefined,
+      c.tabActive === true ? 'tabActive' : undefined,
+      c.windowFocused === true ? 'windowFocused' : undefined,
     ].filter(Boolean);
     if (conditions.length !== 1)
       return {

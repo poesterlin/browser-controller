@@ -30,10 +30,13 @@ const capabilities = [
   'dom',
   'click',
   'fill',
+  'select',
   'wait',
   'evaluate',
   'press',
   'screenshot.viewport',
+  'screenshot.fullPage',
+  'screenshot.element',
 ] as const;
 export class Supervisor {
   readonly token = token();
@@ -347,37 +350,54 @@ export class Supervisor {
               format: c.format,
               textChars: c.textChars,
               depth: c.depth,
+              offset: c.offset,
+              limit: c.limit,
+              within: c.within,
+              nth: c.nth,
+              itemLimit: c.itemLimit,
             });
           case 'screenshot':
-            return s.adapter.screenshot({ fullPage: c.fullPage, selector: c.selector });
+            return s.adapter.screenshot({ fullPage: c.fullPage, selector: c.selector, waitForActive: c.waitForActive });
           case 'click':
             {
               const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
-              await s.adapter.click(locator);
-              return { action: 'clicked', locator };
+              await s.adapter.click(locator, c.within, c.nth);
+              return { action: 'clicked', locator, ...(c.within ? { within: c.within } : {}), ...(c.nth !== undefined ? { nth: c.nth } : {}) };
             }
           case 'press':
             {
               const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
-              await s.adapter.press(locator, c.key);
-              return { action: 'pressed', locator, key: c.key };
+              await s.adapter.press(locator, c.key, c.within, c.nth);
+              return { action: 'pressed', locator, key: c.key, ...(c.within ? { within: c.within } : {}) };
             }
           case 'fill':
           case 'type':
             {
               const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
-              const fillResult = (await s.adapter.fill(locator, c.text)) as
+              const fillResult = (await s.adapter.fill(locator, c.text, c.within, c.nth)) as
                 | { ok?: boolean; valueLength?: number; verified?: boolean }
                 | string
                 | undefined;
               return {
                 action: 'filled',
                 locator,
+                ...(c.within ? { within: c.within } : {}),
                 valueLength: c.text.length,
                 ...(typeof fillResult === 'object' && fillResult?.verified !== undefined
                   ? { verified: fillResult.verified }
                   : {}),
               };
+            }
+          case 'select':
+            {
+              const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
+              const selectResult = await s.adapter.select(locator, {
+                value: c.value,
+                optionText: c.optionText,
+                within: c.within,
+                nth: c.nth,
+              });
+              return { action: 'selected', locator, ...((selectResult as object) ?? {}) };
             }
           case 'wait':
             {
@@ -396,7 +416,7 @@ export class Supervisor {
                 typeof waitResult !== 'object' ||
                 (waitResult as { action?: string }).action !== 'matched'
               )
-                throw new SessionError('timeout', 'wait condition was not met');
+                throw new SessionError('timeout', 'wait condition was not met', waitResult);
               return waitResult;
             }
           case 'evaluate':
@@ -406,7 +426,11 @@ export class Supervisor {
       },
       c.type === 'wait' || c.type === 'navigate'
         ? (c.timeout ?? 10_000) + 1_000
-        : 10_000);
+        : c.type === 'screenshot' && (c.fullPage || c.selector)
+          ? 120_000 + (c.waitForActive ?? 0)
+          : c.type === 'screenshot' && c.waitForActive
+            ? c.waitForActive + 5_000
+          : 10_000);
       return success(id, result);
     } catch (e) {
       const x = e as SessionError;
@@ -528,9 +552,10 @@ function makeExtensionSession(
     navigate: (u, timeout) => call('navigate', { url: u, timeout }),
     screenshot: (o) => call('screenshot', o),
     dom: (o) => call('dom', o),
-    click: (locator) => call('click', { locator }),
-    press: (locator, key) => call('press', { locator, key }),
-    fill: (locator, text) => call('fill', { locator, text }),
+    click: (locator, within, nth) => call('click', { locator, within, nth }),
+    press: (locator, key, within, nth) => call('press', { locator, key, within, nth }),
+    fill: (locator, text, within, nth) => call('fill', { locator, text, within, nth }),
+    select: (locator, options) => call('select', { locator, ...options }),
     wait: (options) => call('wait', options),
     evaluate: (expression) => call('evaluate', { expression }),
     close: (reason) => call('close', { reason }),
