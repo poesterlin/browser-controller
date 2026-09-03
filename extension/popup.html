@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Browser Controller</title>
+<style>body{font:14px system-ui,sans-serif;width:340px;margin:16px}textarea{box-sizing:border-box;width:100%;margin:8px 0}button{padding:6px 12px}#result{display:block;margin-top:10px;color:#444}</style>
+<h2>Browser Controller</h2>
+<p>Run <code>browserctl extension pair</code>. It opens a one-time pairing page automatically. If that page does not open, paste the manual fallback string printed by the command.</p>
+<textarea id="pairing" rows="4" autofocus placeholder="browser-controller://pair?...\n"></textarea>
+<button id="pair">Pair extension</button>
+<output id="result"></output>
+<script src="popup.js"></script>
