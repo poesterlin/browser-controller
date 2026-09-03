@@ -368,6 +368,7 @@ export class Supervisor {
               maxBytes: c.maxBytes,
               maxRoutes: c.maxRoutes,
               maxDuration: c.maxDuration,
+              dedicatedWindow: c.dedicatedWindow,
             });
           case 'click':
             {

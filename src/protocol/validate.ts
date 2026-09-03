@@ -74,6 +74,8 @@ function validateCommon(c: RecordInput, type: CommandType): FailureResult | unde
     return { ok: false, code: 'invalid_request', message: 'url is required' };
   if (type === 'scrape' && c.url !== undefined && !string(c.url))
     return { ok: false, code: 'invalid_request', message: 'url must be a string' };
+  if (type === 'scrape' && c.dedicatedWindow !== undefined && typeof c.dedicatedWindow !== 'boolean')
+    return { ok: false, code: 'invalid_request', message: 'dedicatedWindow must be a boolean' };
   if ((type === 'dom' || type === 'screenshot') && c.selector !== undefined && !string(c.selector))
     return { ok: false, code: 'invalid_request', message: 'selector must be a string' };
   if (type === 'press' && !string(c.key))

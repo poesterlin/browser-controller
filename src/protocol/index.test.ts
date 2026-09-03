@@ -253,6 +253,7 @@ describe('protocol validation', () => {
           maxRoutes: 20,
           maxBytes: 50_000_000,
           maxDuration: 120_000,
+          dedicatedWindow: true,
         },
       }).ok,
     ).toBe(true);
@@ -262,6 +263,14 @@ describe('protocol validation', () => {
         id: 'unbounded-scrape',
         kind: 'command',
         command: { type: 'scrape', session: 's', maxRoutes: 51 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'invalid-dedicated-window',
+        kind: 'command',
+        command: { type: 'scrape', session: 's', dedicatedWindow: 'yes' },
       }),
     ).toMatchObject({ code: 'invalid_request' });
   });

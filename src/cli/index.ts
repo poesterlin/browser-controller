@@ -18,7 +18,7 @@ const command = args[0];
 const effectiveCommand = command === 'doctor' ? 'status' : command;
 const jsonOutput = args.includes('--json');
 const CLI_VERSION = '0.1.0';
-const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation']);
+const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window']);
 const DOM_FORMATS = new Set(['interactive', 'summary', 'clean_html', 'json', 'html']);
 const KNOWN_FLAGS = new Set([
   '--session', '-s', '--json', '--help', '-h', '--selector', '--role', '--name', '--label',
@@ -200,7 +200,7 @@ function validateFlags() {
     navigate: ['--url', '--timeout'],
     dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit'],
     screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
-    scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes', '--max-duration'],
+    scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window'],
     click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout'],
     press: [...locator, ...within, '--key', '--nth'],
     fill: [...locator, ...within, '--value', '--nth'],
@@ -312,6 +312,7 @@ function browserCommand(pairing: boolean): Command {
         maxBytes: numberValue('--max-bytes'),
         maxRoutes: numberValue('--max-routes'),
         maxDuration: numberValue('--max-duration'),
+        dedicatedWindow: args.includes('--dedicated-window'),
       };
     case 'click':
       return { type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), waitNavigation: args.includes('--wait-navigation') || undefined, timeout: numberValue('--timeout') };
@@ -384,7 +385,7 @@ function usage(topic?: string) {
     wait: `usage: ${invocation} wait (LOCATOR | --url URL | --title TEXT | --evaluate EXPR) [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] [--session ID] [--json]\n\n${locator}\n\nLocator waits can require an exact match count, an exact field/text value, or a change from the value observed when waiting began. URL waits are exact; title matching is partial; evaluate expressions are polled until truthy.\n\nExamples:\n  ${invocation} wait --selector '.result' --count 3\n  ${invocation} wait --label Status --value Complete\n  ${invocation} wait --role log --changes\n  ${invocation} wait --evaluate "document.querySelectorAll('[class*=markdown]').length > 0" --timeout 20000`,
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
     screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
-    scrape: `usage: ${invocation} scrape [URL] [--output FILE.zip] [--max-routes N] [--max-bytes N] [--max-duration MS] [--timeout MS] [--session ID] [--json]\n\nCaptures same-origin routes as rendered MHTML plus one viewport PNG per route. Defaults: 20 routes, 50 MB, and 120 seconds; hard limits: 50 routes, 100 MB, and 10 minutes.`,
+    scrape: `usage: ${invocation} scrape [URL] [--output FILE.zip] [--max-routes N] [--max-bytes N] [--max-duration MS] [--timeout MS] [--dedicated-window] [--session ID] [--json]\n\nCaptures same-origin routes as rendered MHTML plus one viewport PNG per route. --dedicated-window moves only the paired tab into a new non-focused window so it remains active there. Defaults: 20 routes, 50 MB, and 120 seconds; hard limits: 50 routes, 100 MB, and 10 minutes.`,
     start: `usage: ${invocation} start [--name NAME] [--adapter ID] [--json]`,
     status: `usage: ${invocation} status [--json]\n       ${invocation} doctor [--json]`,
     list: `usage: ${invocation} list [--json]`,

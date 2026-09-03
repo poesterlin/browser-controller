@@ -18,6 +18,7 @@ export interface ScrapeOptions {
   maxBytes?: number;
   maxRoutes?: number;
   maxDuration?: number;
+  dedicatedWindow?: boolean;
 }
 export interface DomOptions {
   locator?: Locator;

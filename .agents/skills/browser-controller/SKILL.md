@@ -42,7 +42,7 @@ browserctl wait --evaluate EXPR [--timeout MS] --json
 browserctl wait --tab-active [--timeout MS] --json
 browserctl evaluate --expression EXPR --json
 browserctl screenshot [--full-page | --selector CSS] [--wait-for-active MS] --output FILE.png --json
-browserctl scrape [URL] --output FILE.zip [--max-routes N] [--max-bytes N] [--max-duration MS] --json
+browserctl scrape [URL] --output FILE.zip [--max-routes N] [--max-bytes N] [--max-duration MS] [--dedicated-window] --json
 browserctl close --json
 ```
 
@@ -79,6 +79,8 @@ DOM output has five formats via `--format` (default `clean_html`):
 Screenshots capture the active paired tab. The default captures its viewport. `--full-page` and `--selector CSS` scroll and stitch the full document or element, then restore the original scroll position. Pages with fixed or sticky content may show stitching artifacts.
 
 `scrape` navigates the active paired tab and creates a ZIP containing rendered MHTML plus a viewport PNG for each discovered same-origin route. It strips query strings and fragments from discovery and defaults to 20 routes/50 MB/120 seconds, with hard limits of 50 routes/100 MB/10 minutes. Individual capture operations also have deadlines, and failed secondary routes are skipped. Treat archives as potentially private because MHTML includes content visible to the current browser session.
+
+Use `--dedicated-window` only when explicitly requested or when the user approves moving the paired tab. It moves that tab—and no other tab—into a new non-focused window so it remains the active tab in its own window during screenshots.
 
 Use `--json` for a stable `{ "ok": true, "result": ... }` result envelope. Mutation results name the completed action and relevant context, for example `navigated`, `clicked`, `filled`, or `closed`. Commands are protected against duplicate execution, but verify consequential site mutations from page state.
 

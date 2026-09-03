@@ -947,8 +947,14 @@ async function execute(message) {
         message.timeout ?? 10_000,
       );
     } else if (message.type === 'scrape') {
-      const controlTab = await chrome.tabs.get(state.tabId);
-      const [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
+      let controlTab = await chrome.tabs.get(state.tabId);
+      let [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
+      if (active?.id !== state.tabId && message.dedicatedWindow) {
+        const isolated = await chrome.windows.create({ tabId: state.tabId, focused: false });
+        if (!isolated?.id) throw new Error('dedicated_window_failed');
+        controlTab = await chrome.tabs.get(state.tabId);
+        [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
+      }
       if (active?.id !== state.tabId) throw new Error('paired_control_tab_not_active');
       result = await scrapeRoutes(state.tabId, controlTab.windowId, message);
     } else if (message.type === 'click') {

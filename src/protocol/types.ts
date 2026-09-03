@@ -32,6 +32,7 @@ export type Command =
       maxBytes?: number;
       maxRoutes?: number;
       maxDuration?: number;
+      dedicatedWindow?: boolean;
     }
   | { type: 'screenshot'; session: string; fullPage?: boolean; selector?: string; waitForActive?: number }
   | {
