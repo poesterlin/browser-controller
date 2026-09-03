@@ -4,10 +4,6 @@ export class CommandCache {
     this.entries = new Map();
   }
 
-  clear() {
-    this.entries.clear();
-  }
-
   run(key, operation) {
     let pending = this.entries.get(key);
     if (pending) return pending;

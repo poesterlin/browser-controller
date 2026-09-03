@@ -17,9 +17,6 @@ export interface DomOptions {
   nth?: number;
   itemLimit?: number;
 }
-export interface TypeOptions {
-  delay?: number;
-}
 export interface WaitOptions {
   locator?: Locator;
   selector?: string;
