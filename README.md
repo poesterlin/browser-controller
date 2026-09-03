@@ -30,13 +30,15 @@ Adapter credentials are separate from the controller token. The supervisor store
 ```sh
 browserctl status
 browserctl navigate https://example.com [--timeout 10000]
-browserctl dom [LOCATOR] [--max-chars 50000]
+browserctl dom [LOCATOR] [--format summary] [--offset N] [--limit N] [--max-chars 50000]
 browserctl click LOCATOR
 browserctl fill LOCATOR --value VALUE
+browserctl select LOCATOR (--value VALUE | --option-text TEXT)
 browserctl wait LOCATOR [--state visible|attached|hidden] [--timeout MS]
+browserctl wait --tab-active [--timeout MS]
 browserctl wait --url URL [--timeout MS]
 browserctl evaluate --expression JAVASCRIPT
-browserctl screenshot --output FILE.png
+browserctl screenshot [--full-page | --selector CSS] [--wait-for-active MS] --output FILE.png
 browserctl close
 ```
 
@@ -45,6 +47,8 @@ Ordinary browser commands automatically use the current session. If none exists,
 Commands produce concise human-readable results by default. Add `--json` for a stable `{ "ok": true, "result": ... }` envelope. Run `browserctl COMMAND --help` for command-specific syntax and options.
 
 `fill` replaces the complete value and dispatches `input` and `change` events. Its replacement value uses `--value`; `--text` always identifies an element by visible text. `type` remains a compatibility alias with fill semantics.
+
+`select` chooses a native `<select>` option by exact value or normalized visible text, dispatches `input` and `change`, and verifies the resulting value.
 
 ### Locators
 
@@ -57,11 +61,16 @@ Commands that target an element accept exactly one locator:
 
 Semantic matching is case-insensitive and partial by default. Add `--exact` for normalized exact matching. Common native HTML roles and explicit ARIA `role` attributes are supported.
 
+Use `--within-selector`, `--within-role` with optional `--within-name`, `--within-label`, or `--within-text` to scope a target to a repeated card, row, or section. Add `--within-exact` for exact scope matching.
+
 ```sh
 browserctl click --role button --name "Add Bookmark" --exact
 browserctl fill --label URL --value https://example.com
 browserctl wait --text Saved --timeout 10000
+browserctl click --within-text Hardware-Basteln --role button --name Edit
 ```
+
+`dom --format summary` returns visible landmarks, headings, and controls, groups repeated items, and accepts `--item-limit`. A DOM locator can match repeated records; use `--offset` and `--limit` to retrieve a slice. Add zero-based `--nth` to choose one match; mutation commands reject ambiguous unindexed locators. Screenshot capture defaults to the viewport; full-page and selector captures scroll and stitch the active paired tab and restore its original position afterward. `--wait-for-active` waits for that tab instead of failing immediately.
 
 `wait` accepts exactly one locator or `--url`. Locator waits default to `visible`. DOM output is limited to 50,000 characters by default; `--max-chars` accepts values up to 1,000,000 and reports when output was truncated.
 

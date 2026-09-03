@@ -18,12 +18,14 @@ const command = args[0];
 const effectiveCommand = command === 'doctor' ? 'status' : command;
 const jsonOutput = args.includes('--json');
 const CLI_VERSION = '0.1.0';
-const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--full-page', '--changes']);
-const DOM_FORMATS = new Set(['interactive', 'clean_html', 'json', 'html']);
+const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused']);
+const DOM_FORMATS = new Set(['interactive', 'summary', 'clean_html', 'json', 'html']);
 const KNOWN_FLAGS = new Set([
   '--session', '-s', '--json', '--help', '-h', '--selector', '--role', '--name', '--label',
   '--text', '--exact', '--name', '--adapter', '--url', '--timeout', '--max-chars', '--output',
   '--full-page', '--value', '--state', '--expression', '--reason', '--format', '--text-chars', '--key', '--depth', '--count', '--changes',
+  '--offset', '--limit', '--within-selector', '--within-role', '--within-name', '--within-label', '--within-text', '--within-exact',
+  '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
 ]);
 const invocation =
   process.env.BROWSER_CONTROLLER_COMMAND ??
@@ -42,6 +44,7 @@ class CliError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    readonly details?: unknown,
   ) {
     super(message);
   }
@@ -189,16 +192,18 @@ const numberValue = (...names: string[]) => {
 function validateFlags() {
   const common = ['--session', '-s', '--json', '--help', '-h'];
   const locator = ['--selector', '--role', '--name', '--label', '--text', '--exact'];
+  const within = ['--within-selector', '--within-role', '--within-name', '--within-label', '--within-text', '--within-exact'];
   const byCommand: Record<string, string[]> = {
     start: ['--name', '--adapter'],
     navigate: ['--url', '--timeout'],
-    dom: [...locator, '--max-chars', '--format', '--text-chars', '--depth'],
-    screenshot: ['--output', '--selector', '--full-page'],
-    click: locator,
-    press: [...locator, '--key'],
-    fill: [...locator, '--value'],
-    type: [...locator, '--value'],
-    wait: [...locator, '--url', '--state', '--timeout', '--title', '--evaluate', '--count', '--value', '--changes'],
+    dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit'],
+    screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
+    click: [...locator, ...within, '--nth'],
+    press: [...locator, ...within, '--key', '--nth'],
+    fill: [...locator, ...within, '--value', '--nth'],
+    type: [...locator, ...within, '--value', '--nth'],
+    select: [...locator, ...within, '--value', '--option-text', '--nth'],
+    wait: [...locator, ...within, '--url', '--state', '--timeout', '--title', '--evaluate', '--count', '--value', '--changes', '--nth', '--tab-active', '--window-focused'],
     evaluate: ['--expression'],
     close: ['--reason'],
     status: [],
@@ -237,6 +242,18 @@ function commandLocator(): Locator | undefined {
   return candidates[0];
 }
 
+function withinLocator(): Locator | undefined {
+  const candidates: Locator[] = [];
+  const exact = args.includes('--within-exact');
+  if (value('--within-selector')) candidates.push({ by: 'css', value: value('--within-selector')! });
+  if (value('--within-role')) candidates.push({ by: 'role', value: value('--within-role')!, name: value('--within-name'), exact });
+  if (value('--within-label')) candidates.push({ by: 'label', value: value('--within-label')!, exact });
+  if (value('--within-text')) candidates.push({ by: 'text', value: value('--within-text')!, exact });
+  if (value('--within-name') && !value('--within-role')) throw new Error('--within-name requires --within-role');
+  if (candidates.length > 1) throw new Error('use exactly one scope locator: --within-selector, --within-role, --within-label, or --within-text');
+  return candidates[0];
+}
+
 function browserCommand(pairing: boolean): Command {
   if (pairing) return { type: 'extension_pair' };
   const session = value('--session', '-s') ?? 'last';
@@ -257,29 +274,37 @@ function browserCommand(pairing: boolean): Command {
     case 'dom': {
       const format = value('--format');
       if (format !== undefined && !DOM_FORMATS.has(format))
-        throw new Error('dom --format must be interactive, clean_html, json, or html');
+        throw new Error('dom --format must be interactive, summary, clean_html, json, or html');
       return {
         type: 'dom',
         session,
         locator: commandLocator(),
+        within: withinLocator(),
         maxChars: numberValue('--max-chars'),
-        format: format as 'interactive' | 'clean_html' | 'json' | 'html' | undefined,
+        format: format as 'interactive' | 'summary' | 'clean_html' | 'json' | 'html' | undefined,
         textChars: numberValue('--text-chars'),
         depth: numberValue('--depth'),
+        offset: numberValue('--offset'),
+        limit: numberValue('--limit'),
+        nth: numberValue('--nth'),
+        itemLimit: numberValue('--item-limit'),
       };
     }
     case 'screenshot':
+      if (args.includes('--full-page') && value('--selector'))
+        throw new Error('screenshot accepts --full-page or --selector, not both');
       return {
         type: 'screenshot',
         session,
         selector: value('--selector'),
         fullPage: args.includes('--full-page'),
+        waitForActive: numberValue('--wait-for-active'),
       };
     case 'click':
-      return { type: 'click', session, locator: commandLocator() };
+      return { type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth') };
     case 'press': {
       if (value('--key') === undefined) throw new Error('press requires --key KEY');
-      return { type: 'press', session, locator: commandLocator(), key: value('--key')! };
+      return { type: 'press', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), key: value('--key')! };
     }
     case 'fill':
     case 'type':
@@ -288,13 +313,27 @@ function browserCommand(pairing: boolean): Command {
         type: 'fill',
         session,
         locator: commandLocator(),
+        within: withinLocator(),
+        nth: numberValue('--nth'),
         text: value('--value')!,
+      };
+    case 'select':
+      return {
+        type: 'select',
+        session,
+        locator: commandLocator(),
+        within: withinLocator(),
+        nth: numberValue('--nth'),
+        value: value('--value'),
+        optionText: value('--option-text'),
       };
     case 'wait':
       return {
         type: 'wait',
         session,
         locator: commandLocator(),
+        within: withinLocator(),
+        nth: numberValue('--nth'),
         url: value('--url'),
         title: value('--title'),
         evaluate: value('--evaluate'),
@@ -303,6 +342,8 @@ function browserCommand(pairing: boolean): Command {
         changes: args.includes('--changes') || undefined,
         state: value('--state') as 'attached' | 'visible' | 'hidden' | undefined,
         timeout: numberValue('--timeout'),
+        tabActive: args.includes('--tab-active'),
+        windowFocused: args.includes('--window-focused'),
       };
     case 'evaluate':
       return { type: 'evaluate', session, expression: value('--expression') ?? '' };
@@ -321,13 +362,14 @@ function usage(topic?: string) {
   --text TEXT [--exact]`;
   const details: Record<string, string> = {
     navigate: `usage: ${invocation} navigate URL [--timeout MS] [--session ID] [--json]\n\nExample: ${invocation} navigate https://example.com --timeout 15000`,
-    dom: `usage: ${invocation} dom [LOCATOR] [--format interactive|clean_html|json] [--max-chars N] [--text-chars N] [--depth N] [--session ID] [--json]\n\n${locator}\n\nFORMATS:\n  interactive  Flat list of actionable elements with role, name, state, and a CSS hint\n  clean_html   Trimmed markup: whitelisted attributes, clipped text (default)\n  json         Full recursive tree with ARIA lifted into an aria object\n\n--depth bounds tree depth for clean_html and json. (Raw html is also accepted as an escape hatch.)\n\nExamples:\n  ${invocation} dom --format interactive\n  ${invocation} dom --format json --role main --depth 4`,
+    dom: `usage: ${invocation} dom [LOCATOR] [--format interactive|summary|clean_html|json] [--offset N] [--limit N] [--item-limit N] [--nth N] [--max-chars N] [--text-chars N] [--depth N] [--session ID] [--json]\n\n${locator}\n\nScope any locator with --within-selector CSS, --within-role ROLE [--within-name NAME], --within-label LABEL, or --within-text TEXT. Summary output groups repeated items and defaults to 100 groups. --nth is zero-based.`,
     click: `usage: ${invocation} click LOCATOR [--session ID] [--json]\n\n${locator}\n\nExample: ${invocation} click --role button --name Save --exact`,
     press: `usage: ${invocation} press LOCATOR --key KEY [--session ID] [--json]\n\n${locator}\n\nKEY combines modifiers with '+': Enter, Tab, Escape, ctrl+Enter, ctrl+a, Shift+Tab\n\nExample: ${invocation} press --selector '#chat-input' --key ctrl+Enter`,
     fill: `usage: ${invocation} fill LOCATOR --value VALUE [--session ID] [--json]\n\n${locator}\n\nExample: ${invocation} fill --label URL --value https://example.com`,
+    select: `usage: ${invocation} select LOCATOR (--value VALUE | --option-text TEXT) [--nth N] [--session ID] [--json]\n\n${locator}\n\nExample: ${invocation} select --label Kind --value atom`,
     wait: `usage: ${invocation} wait (LOCATOR | --url URL | --title TEXT | --evaluate EXPR) [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] [--session ID] [--json]\n\n${locator}\n\nLocator waits can require an exact match count, an exact field/text value, or a change from the value observed when waiting began. URL waits are exact; title matching is partial; evaluate expressions are polled until truthy.\n\nExamples:\n  ${invocation} wait --selector '.result' --count 3\n  ${invocation} wait --label Status --value Complete\n  ${invocation} wait --role log --changes\n  ${invocation} wait --evaluate "document.querySelectorAll('[class*=markdown]').length > 0" --timeout 20000`,
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
-    screenshot: `usage: ${invocation} screenshot [--output FILE.png] [--session ID] [--json]`,
+    screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
     start: `usage: ${invocation} start [--name NAME] [--adapter ID] [--json]`,
     status: `usage: ${invocation} status [--json]\n       ${invocation} doctor [--json]`,
     list: `usage: ${invocation} list [--json]`,
@@ -344,10 +386,11 @@ Commands:
   dom              Read bounded page markup
   click            Click an element
   fill             Replace a field value
+  select           Select an option
   press            Dispatch a key or key chord to an element
   wait             Wait for a locator or URL
   evaluate         Evaluate page-world JavaScript
-  screenshot       Save the active control-tab viewport
+  screenshot       Save a viewport, full-page, or element image
   list             List sessions
   start            Explicitly create or reconnect a session
   close            Close a session
@@ -380,7 +423,7 @@ async function main() {
   const autoStart =
     pairing ||
     effectiveCommand === 'start' ||
-    ['navigate', 'dom', 'screenshot', 'click', 'fill', 'type', 'press', 'wait', 'evaluate'].includes(
+    ['navigate', 'dom', 'screenshot', 'click', 'fill', 'type', 'select', 'press', 'wait', 'evaluate'].includes(
       effectiveCommand,
     );
   let ws: WebSocket;
@@ -407,6 +450,8 @@ async function main() {
       ? 305_000
       : request.type === 'wait'
         ? (request.timeout ?? 10_000) + 5_000
+        : request.type === 'screenshot' && request.waitForActive
+          ? request.waitForActive + 125_000
         : 15_000;
     const timer = setTimeout(() => reject(new Error('command timed out waiting for supervisor')), timeoutMs);
     const finish = (error?: Error) => {
@@ -453,7 +498,7 @@ async function main() {
         } else if (command === 'dom') {
           const result = message.result;
           if (jsonOutput) printResult('dom', result);
-          else if (result?.format === 'interactive') {
+          else if (result?.format === 'interactive' || result?.format === 'summary') {
             for (const item of result.items ?? []) {
               const states = item.states?.length ? ` [${item.states.join(',')}]` : '';
               const value = item.value ? ` value="${item.value}"` : '';
@@ -462,13 +507,13 @@ async function main() {
             }
           } else if (result?.format === 'json') console.log(JSON.stringify(result.node, null, 2));
           else console.log(typeof result === 'string' ? result : (result?.html ?? ''));
-          if (result?.format === 'interactive' && result?.truncated)
+          if ((result?.format === 'interactive' || result?.format === 'summary') && result?.truncated)
             console.error(
               `Interactive list truncated to ${result.items.length} of ${result.totalItems} elements; scope with a LOCATOR to see more.`,
             );
           else if (result?.truncated)
             console.error(
-              `DOM output truncated to ${result.format === 'json' ? 'tree' : result.html.length} of ${result.totalChars} characters; use --max-chars to change the limit.`,
+               `DOM output truncated to ${result.format === 'json' ? 'tree' : result.returnedChars} of ${result.totalChars} characters; use --max-chars to change the limit.`,
             );
         } else if (command === 'screenshot') {
           const output = value('--output') ?? 'screenshot.png';
@@ -478,7 +523,7 @@ async function main() {
         } else printResult(effectiveCommand, message.result ?? {});
         finish();
       } else if (message.error) {
-        finish(new CliError(message.error.code, message.error.message));
+        finish(new CliError(message.error.code, message.error.message, message.error.details));
       }
     });
     ws.once('error', () => finish(new Error('supervisor connection failed')));
@@ -494,7 +539,7 @@ if (command === '--internal-supervisor') {
   await main().catch((error) => {
     const code = error instanceof CliError ? error.code : 'cli_error';
     if (jsonOutput)
-      console.error(JSON.stringify({ ok: false, error: { code, message: error.message } }));
+      console.error(JSON.stringify({ ok: false, error: { code, message: error.message, ...(error instanceof CliError && error.details !== undefined ? { details: error.details } : {}) } }));
     else console.error(`Error [${code}]: ${error.message}`);
     process.exitCode = 1;
   });
@@ -534,6 +579,7 @@ function printResult(kind: string, result: any) {
     click: `Clicked${locator ? ` ${locator}` : ''}.`,
     press: `Pressed ${result.key}${locator ? ` on ${locator}` : ''}.`,
     fill: `Filled${locator ? ` ${locator}` : ''} with ${result.valueLength ?? 0} characters.${result.verified === false ? ' WARNING: field value did not match after fill.' : ''}`,
+    select: `Selected ${JSON.stringify(result.value ?? result.optionText)}${locator ? ` in ${locator}` : ''}.`,
     wait: `Matched ${result.condition ?? 'condition'} after ${result.elapsedMs ?? 0}ms.`,
     close: `Closed session ${result.session}.`,
     screenshot: `Saved screenshot to ${result.output} (${result.bytes} bytes).`,

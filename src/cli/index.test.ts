@@ -115,6 +115,11 @@ describe('CLI transport', () => {
         '--name',
         'Add Bookmark',
         '--exact',
+        '--within-role',
+        'article',
+        '--within-name',
+        'Bookmarks',
+        '--within-exact',
         '--json',
       ],
       {
@@ -138,6 +143,7 @@ describe('CLI transport', () => {
         type: 'click',
         session: 'last',
         locator: { by: 'role', value: 'button', name: 'Add Bookmark', exact: true },
+        within: { by: 'role', value: 'article', name: 'Bookmarks', exact: true },
       },
     });
   });
