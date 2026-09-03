@@ -643,7 +643,7 @@ async function nativePress(tabId, chord) {
   }
 }
 
-async function stitchedScreenshot(tabId, windowId, selector) {
+async function stitchedScreenshot(tabId, windowId, selector, returnBytes = false, deadline = Infinity) {
   const response = (await page(tabId, { type: 'screenshot_region', selector }))[0];
   if (response?.error)
     throw new Error(`page_world_error: ${response.error.message ?? String(response.error)}`);
@@ -670,6 +670,7 @@ async function stitchedScreenshot(tabId, windowId, selector) {
     let tileIndex = 0;
     for (const requestedY of yStops) {
       for (const requestedX of xStops) {
+        if (Date.now() >= deadline) throw new Error('scrape_screenshot_timeout');
         if (tileIndex === 1 && !selector)
           await page(tabId, { type: 'screenshot_sticky', hide: true });
         const scrollResponse = (await page(tabId, {
@@ -718,10 +719,9 @@ async function stitchedScreenshot(tabId, windowId, selector) {
   }
   const blob = await canvas.convertToBlob({ type: 'image/png' });
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += 0x8000)
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  return { data: btoa(binary), mimeType: 'image/png', width: outputWidth, height: outputHeight };
+  if (returnBytes)
+    return { bytes, mimeType: 'image/png', width: outputWidth, height: outputHeight };
+  return { data: bytesToBase64(bytes), mimeType: 'image/png', width: outputWidth, height: outputHeight };
 }
 
 async function tabObservation(tabId) {
@@ -866,17 +866,8 @@ async function scrapeRoutes(tabId, windowId, message) {
       let screenshot;
       try {
         mhtml = await captureMhtml(tabId);
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        const screenshotUrl = await withTimeout(
-          chrome.tabs.captureVisibleTab(windowId, { format: 'png' }),
-          10_000,
-          'scrape_screenshot_timeout',
-        );
-        screenshot = new Uint8Array(await withTimeout(
-          (async () => (await fetch(screenshotUrl)).arrayBuffer())(),
-          10_000,
-          'scrape_screenshot_decode_timeout',
-        ));
+        const fullPage = await stitchedScreenshot(tabId, windowId, undefined, true, deadline);
+        screenshot = fullPage.bytes;
       } catch (error) {
         if (!files.length) throw error;
         skippedRoutes += 1;
@@ -913,7 +904,7 @@ async function scrapeRoutes(tabId, windowId, message) {
     };
     const archive = createScrapeArchive(files, {
       ...metadata,
-      format: 'Rendered MHTML snapshots with viewport screenshots',
+      format: 'Rendered MHTML snapshots with full-page screenshots',
     });
     return {
       ...metadata,

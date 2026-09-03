@@ -78,7 +78,7 @@ DOM output has five formats via `--format` (default `clean_html`):
 
 Screenshots capture the active paired tab. The default captures its viewport. `--full-page` and `--selector CSS` scroll and stitch the full document or element, then restore the original scroll position. Pages with fixed or sticky content may show stitching artifacts.
 
-`scrape` navigates the active paired tab and creates a ZIP containing rendered MHTML plus a viewport PNG for each discovered same-origin route. It strips query strings and fragments from discovery and defaults to 20 routes/50 MB/120 seconds, with hard limits of 50 routes/100 MB/10 minutes. Individual capture operations also have deadlines, and failed secondary routes are skipped. Treat archives as potentially private because MHTML includes content visible to the current browser session.
+`scrape` navigates the active paired tab and creates a ZIP containing rendered MHTML plus a full-page stitched PNG for each discovered same-origin route. Sticky and fixed elements are retained only in the first tile. It strips query strings and fragments from discovery and defaults to 20 routes/50 MB/120 seconds, with hard limits of 50 routes/100 MB/10 minutes. Individual capture operations also have deadlines, and failed secondary routes are skipped. Treat archives as potentially private because MHTML includes content visible to the current browser session.
 
 Use `--dedicated-window` only when explicitly requested or when the user approves moving the paired tab. It moves that tab—and no other tab—into a new non-focused window so it remains the active tab in its own window during screenshots.
 
