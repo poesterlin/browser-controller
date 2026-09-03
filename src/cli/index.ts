@@ -466,6 +466,7 @@ async function main() {
   await new Promise<void>((resolve, reject) => {
     let pair: any;
     let starting = false;
+    const artifactChunks: Buffer[] = [];
     const timeoutMs = pairing
       ? 305_000
       : request.type === 'wait'
@@ -475,7 +476,7 @@ async function main() {
         : request.type === 'screenshot' && request.waitForActive
           ? request.waitForActive + 125_000
           : request.type === 'scrape'
-            ? (request.maxDuration ?? 120_000) + 30_000
+            ? (request.maxDuration ?? 120_000) + 90_000
         : 15_000;
     const timer = setTimeout(() => reject(new Error('command timed out waiting for supervisor')), timeoutMs);
     const finish = (error?: Error) => {
@@ -486,6 +487,12 @@ async function main() {
     };
     ws.on('message', (raw) => {
       const message = JSON.parse(raw.toString());
+      if (!pairing && message.id === id && message.event === 'artifact_chunk') {
+        if (message.index !== artifactChunks.length || typeof message.data !== 'string')
+          return finish(new Error('invalid artifact chunk sequence'));
+        artifactChunks.push(Buffer.from(message.data, 'base64'));
+        return;
+      }
       if (pairing && message.event === 'adapter_connected' && pair && !starting) {
         starting = true;
         ws.send(
@@ -551,7 +558,9 @@ async function main() {
           const result = message.result;
           if (result.mimeType !== 'application/zip')
             throw new Error(`unexpected scrape result type: ${result.mimeType ?? 'missing'}`);
-          const archive = Buffer.from(result.data, 'base64');
+          if (typeof result.chunks !== 'number' || result.chunks !== artifactChunks.length)
+            throw new Error('incomplete scrape archive transfer');
+          const archive = Buffer.concat(artifactChunks);
           writeFileSync(output, archive);
           printResult('scrape', {
             action: 'scrape-saved',

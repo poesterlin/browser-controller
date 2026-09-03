@@ -2,6 +2,7 @@ import { CommandCache } from './command-cache.js';
 import { selectControlTab } from './control-tab.js';
 import { withTimeout } from './async.js';
 import { createScrapeArchive } from './scrape-archive.js';
+import { artifactChunks } from './artifact-chunks.js';
 
 const state = {
   socket: null,
@@ -916,7 +917,7 @@ async function scrapeRoutes(tabId, windowId, message) {
     });
     return {
       ...metadata,
-      data: bytesToBase64(archive),
+      archive,
       mimeType: 'application/zip',
       bytes: archive.length,
     };
@@ -1121,7 +1122,29 @@ async function handle(message, socket) {
   if (message.kind !== 'command') return;
   const key = `${message.session}:${message.id}`;
   const response = await state.commands.run(key, () => execute(message));
-  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(response));
+  if (socket.readyState !== WebSocket.OPEN) return;
+  if (response.ok && response.result?.archive instanceof Uint8Array) {
+    const { archive, ...result } = response.result;
+    let index = 0;
+    for (const chunk of artifactChunks(archive)) {
+      socket.send(JSON.stringify({
+        reply: message.id,
+        event: 'artifact_chunk',
+        index,
+        data: bytesToBase64(chunk),
+      }));
+      index += 1;
+      const started = Date.now();
+      while (socket.bufferedAmount > 2 * 1024 * 1024) {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        if (Date.now() - started > 30_000) throw new Error('artifact_transport_timeout');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    socket.send(JSON.stringify({ ...response, result: { ...result, chunks: index } }));
+    return;
+  }
+  socket.send(JSON.stringify(response));
 }
 
 let backoffMs = 2000;

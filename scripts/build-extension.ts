@@ -13,6 +13,7 @@ for (const file of [
   'control-tab.js',
   'async.js',
   'scrape-archive.js',
+  'artifact-chunks.js',
   'content.js',
   'options.html',
   'options.js',

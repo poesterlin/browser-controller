@@ -186,14 +186,14 @@ export class Supervisor {
     if (v.value.kind !== 'command' || !v.value.command) return;
     const prior = s.commandResults?.get(v.value.id);
     if (prior) {
-      s.send(JSON.stringify(await prior));
+      await sendControllerResponse(s, await prior);
       return;
     }
     const result = this.dispatch(v.value.id, v.value.command);
     s.commandResults?.set(v.value.id, result);
     if ((s.commandResults?.size ?? 0) > 1_000)
       s.commandResults?.delete(s.commandResults.keys().next().value!);
-    s.send(JSON.stringify(await result));
+    await sendControllerResponse(s, await result);
   }
   private async connectedAdapter(adapterId?: string, timeoutMs = 10_000) {
     const deadline = Date.now() + timeoutMs;
@@ -439,7 +439,7 @@ export class Supervisor {
         return undefined;
       },
       c.type === 'scrape'
-        ? (c.maxDuration ?? 120_000) + 15_000
+        ? (c.maxDuration ?? 120_000) + 75_000
         : c.type === 'wait' || c.type === 'navigate'
         ? (c.timeout ?? 10_000) + 1_000
         : c.type === 'click'
@@ -467,6 +467,31 @@ export class Supervisor {
 }
 function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object';
+}
+
+function sendSocket(socket: Socket, value: unknown) {
+  return new Promise<void>((resolve, reject) => {
+    if (socket.readyState !== WebSocket.OPEN) return resolve();
+    socket.send(JSON.stringify(value), (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function sendControllerResponse(socket: Socket, response: Response) {
+  if (response.ok && isObj(response.result) && Array.isArray(response.result.chunks)) {
+    const { chunks, ...result } = response.result;
+    for (let index = 0; index < chunks.length; index += 1)
+      await sendSocket(socket, {
+        version: PROTOCOL_VERSION,
+        id: response.id,
+        ok: true,
+        event: 'artifact_chunk',
+        index,
+        data: chunks[index],
+      });
+    await sendSocket(socket, { ...response, result: { ...result, chunks: chunks.length } });
+    return;
+  }
+  await sendSocket(socket, response);
 }
 
 function bindExtension(socket: Socket, session: string) {
@@ -528,14 +553,29 @@ function makeExtensionSession(
     if (handler) sock.on('message', handler);
   };
   const ref = { current: socket as Socket | null, adapterId: '', attach };
-  const pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+  const pending = new Map<number, {
+    resolve: (v: any) => void;
+    reject: (e: any) => void;
+    chunks: string[];
+  }>();
   handler = (raw: unknown) => {
     try {
       const m = JSON.parse(String(raw));
       if (m.reply && pending.has(m.reply)) {
         const p = pending.get(m.reply)!;
+        if (m.event === 'artifact_chunk') {
+          if (m.index !== p.chunks.length || typeof m.data !== 'string') {
+            pending.delete(m.reply);
+            p.reject(new SessionError('artifact_transport_error', 'invalid artifact chunk sequence'));
+          } else p.chunks.push(m.data);
+          return;
+        }
         pending.delete(m.reply);
-        if (m.ok) p.resolve(m.result);
+        if (m.ok) {
+          if (typeof m.result?.chunks === 'number' && m.result.chunks !== p.chunks.length)
+            p.reject(new SessionError('artifact_transport_error', 'incomplete artifact transfer'));
+          else p.resolve({ ...m.result, ...(p.chunks.length ? { chunks: p.chunks } : {}) });
+        }
         else
           p.reject(
             new SessionError(
@@ -550,7 +590,7 @@ function makeExtensionSession(
   const call = (type: string, payload: object) =>
     new Promise<any>((resolve, reject) => {
       const id = ++n;
-      pending.set(id, { resolve, reject });
+      pending.set(id, { resolve, reject, chunks: [] });
       // The adapter may be mid-reconnect (token refresh, worker restart).
       // Wait briefly for the socket to come back before giving up.
       const start = Date.now();

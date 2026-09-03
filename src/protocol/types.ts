@@ -150,7 +150,6 @@ export interface ScreenshotResult {
   height: number;
 }
 export interface ScrapeResult {
-  data: string;
   mimeType: 'application/zip';
   url: string;
   title: string | null;
@@ -160,6 +159,7 @@ export interface ScrapeResult {
   routes: number;
   skippedRoutes?: number;
   deadlineReached?: boolean;
+  chunks?: string[];
 }
 export type DomFormat = 'interactive' | 'summary' | 'clean_html' | 'json' | 'html';
 export interface DomInteractiveItem {

@@ -188,18 +188,28 @@ describe('CLI transport', () => {
         if (message.kind === 'hello')
           socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: {} }));
         else if (message.kind === 'command')
-          socket.send(JSON.stringify({
-            version: 1,
-            id: message.id,
-            ok: true,
-            result: {
+          {
+            socket.send(JSON.stringify({
+              version: 1,
+              id: message.id,
+              ok: true,
+              event: 'artifact_chunk',
+              index: 0,
               data: archive.toString('base64'),
-              mimeType: 'application/zip',
-              routes: 3,
-              skippedRoutes: 1,
-              deadlineReached: false,
-            },
-          }));
+            }));
+            socket.send(JSON.stringify({
+              version: 1,
+              id: message.id,
+              ok: true,
+              result: {
+                chunks: 1,
+                mimeType: 'application/zip',
+                routes: 3,
+                skippedRoutes: 1,
+                deadlineReached: false,
+              },
+            }));
+          }
       });
     });
 
