@@ -40,7 +40,7 @@ browserctl wait --url URL [--timeout MS]
 browserctl wait --url-glob '**/karriere/**' [--timeout MS]
 browserctl evaluate --expression JAVASCRIPT
 browserctl screenshot [--full-page | --selector CSS] [--wait-for-active MS] --output FILE.png
-browserctl scrape [URL] --output page-scrape.zip [--max-routes 20] [--max-bytes 50000000]
+browserctl scrape [URL] --output page-scrape.zip [--max-routes 20] [--max-bytes 50000000] [--max-duration 120000]
 browserctl close
 ```
 
@@ -76,7 +76,7 @@ browserctl click --within-text Hardware-Basteln --role button --name Edit
 
 Summary links include their resolved `href`, and summary accounting distinguishes raw elements, unique groups, and returned groups. `click` automatically waits for native form submissions; use `--wait-navigation` when a non-submit control is also expected to navigate. URL waits accept either exact `--url` or `--url-glob` patterns where `*` stays within one path segment and `**` spans segments.
 
-`scrape` captures the requested page and discovered same-origin routes into one ZIP. Each route gets a rendered MHTML snapshot (including loaded assets) and a viewport PNG. Discovery strips query strings and fragments, never leaves the starting origin, and is bounded to 20 routes and 50 MB by default (hard limits: 50 routes and 100 MB). The archive can contain content visible to your signed-in browser; review it before sharing.
+`scrape` captures the requested page and discovered same-origin routes into one ZIP. Each route gets a rendered MHTML snapshot (including loaded assets) and a viewport PNG. Discovery strips query strings and fragments, never leaves the starting origin, and is bounded to 20 routes, 50 MB, and 120 seconds by default (hard limits: 50 routes, 100 MB, and 10 minutes). Every CDP, screenshot, decode, and link-discovery operation has its own deadline; failed secondary routes are skipped. The archive can contain content visible to your signed-in browser; review it before sharing.
 
 `wait` accepts exactly one locator or `--url`. Locator waits default to `visible`. DOM output is limited to 50,000 characters by default; `--max-chars` accepts values up to 1,000,000 and reports when output was truncated.
 

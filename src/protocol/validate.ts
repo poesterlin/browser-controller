@@ -56,6 +56,7 @@ const INTEGER_RANGES: Array<[(c: RecordInput) => unknown, number, number, string
   [(c) => c.count, 0, 100_000, 'count must be between 0 and 100000'],
   [(c) => c.maxBytes, 1_000_000, 100_000_000, 'maxBytes must be between 1000000 and 100000000'],
   [(c) => c.maxRoutes, 1, 50, 'maxRoutes must be between 1 and 50'],
+  [(c) => c.maxDuration, 10_000, 600_000, 'maxDuration must be between 10000 and 600000'],
 ];
 
 function rangeFailure(c: RecordInput, rule: (typeof INTEGER_RANGES)[number]): FailureResult | undefined {

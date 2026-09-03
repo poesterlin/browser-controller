@@ -31,6 +31,7 @@ export type Command =
       timeout?: number;
       maxBytes?: number;
       maxRoutes?: number;
+      maxDuration?: number;
     }
   | { type: 'screenshot'; session: string; fullPage?: boolean; selector?: string; waitForActive?: number }
   | {
@@ -155,6 +156,8 @@ export interface ScrapeResult {
   capturedAt: string;
   bytes: number;
   routes: number;
+  skippedRoutes?: number;
+  deadlineReached?: boolean;
 }
 export type DomFormat = 'interactive' | 'summary' | 'clean_html' | 'json' | 'html';
 export interface DomInteractiveItem {

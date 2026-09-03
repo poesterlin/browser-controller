@@ -28,7 +28,7 @@ const KNOWN_FLAGS = new Set([
   '--offset', '--limit', '--within-selector', '--within-role', '--within-name', '--within-label', '--within-text', '--within-exact',
   '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
   '--url-glob', '--wait-navigation',
-  '--max-bytes', '--max-routes',
+  '--max-bytes', '--max-routes', '--max-duration',
 ]);
 const invocation =
   process.env.BROWSER_CONTROLLER_COMMAND ??
@@ -201,7 +201,7 @@ function validateFlags() {
     navigate: ['--url', '--timeout'],
     dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit'],
     screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
-    scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes'],
+    scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes', '--max-duration'],
     click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout'],
     press: [...locator, ...within, '--key', '--nth'],
     fill: [...locator, ...within, '--value', '--nth'],
@@ -312,6 +312,7 @@ function browserCommand(pairing: boolean): Command {
         timeout: numberValue('--timeout'),
         maxBytes: numberValue('--max-bytes'),
         maxRoutes: numberValue('--max-routes'),
+        maxDuration: numberValue('--max-duration'),
       };
     case 'click':
       return { type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), waitNavigation: args.includes('--wait-navigation') || undefined, timeout: numberValue('--timeout') };
@@ -384,7 +385,7 @@ function usage(topic?: string) {
     wait: `usage: ${invocation} wait (LOCATOR | --url URL | --title TEXT | --evaluate EXPR) [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] [--session ID] [--json]\n\n${locator}\n\nLocator waits can require an exact match count, an exact field/text value, or a change from the value observed when waiting began. URL waits are exact; title matching is partial; evaluate expressions are polled until truthy.\n\nExamples:\n  ${invocation} wait --selector '.result' --count 3\n  ${invocation} wait --label Status --value Complete\n  ${invocation} wait --role log --changes\n  ${invocation} wait --evaluate "document.querySelectorAll('[class*=markdown]').length > 0" --timeout 20000`,
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
     screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
-    scrape: `usage: ${invocation} scrape [URL] [--output FILE.zip] [--max-routes N] [--max-bytes N] [--timeout MS] [--session ID] [--json]\n\nCaptures same-origin routes as rendered MHTML plus one viewport PNG per route. Defaults: 20 routes and 50 MB; hard limits: 50 routes and 100 MB.`,
+    scrape: `usage: ${invocation} scrape [URL] [--output FILE.zip] [--max-routes N] [--max-bytes N] [--max-duration MS] [--timeout MS] [--session ID] [--json]\n\nCaptures same-origin routes as rendered MHTML plus one viewport PNG per route. Defaults: 20 routes, 50 MB, and 120 seconds; hard limits: 50 routes, 100 MB, and 10 minutes.`,
     start: `usage: ${invocation} start [--name NAME] [--adapter ID] [--json]`,
     status: `usage: ${invocation} status [--json]\n       ${invocation} doctor [--json]`,
     list: `usage: ${invocation} list [--json]`,
@@ -458,6 +459,10 @@ async function main() {
     return;
   }
   const id = randomUUID();
+  if (request.type === 'scrape')
+    console.error(
+      `Capturing up to ${request.maxRoutes ?? 20} routes for up to ${Math.round((request.maxDuration ?? 120_000) / 1000)} seconds…`,
+    );
   ws.send(JSON.stringify({ version: PROTOCOL_VERSION, id, kind: 'command', command: request }));
   await new Promise<void>((resolve, reject) => {
     let pair: any;
@@ -471,7 +476,7 @@ async function main() {
         : request.type === 'screenshot' && request.waitForActive
           ? request.waitForActive + 125_000
           : request.type === 'scrape'
-            ? (request.timeout ?? 15_000) * (request.maxRoutes ?? 20) + 60_000
+            ? (request.maxDuration ?? 120_000) + 30_000
         : 15_000;
     const timer = setTimeout(() => reject(new Error('command timed out waiting for supervisor')), timeoutMs);
     const finish = (error?: Error) => {
@@ -551,6 +556,8 @@ async function main() {
             capturedAt: result.capturedAt,
             routes: result.routes,
             capturedBytes: result.bytes,
+            skippedRoutes: result.skippedRoutes ?? 0,
+            deadlineReached: result.deadlineReached ?? false,
             format: 'Rendered MHTML snapshots with viewport screenshots',
           };
           const entries: Record<string, Uint8Array> = {

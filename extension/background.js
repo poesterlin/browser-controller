@@ -1,5 +1,6 @@
 import { CommandCache } from './command-cache.js';
 import { selectControlTab } from './control-tab.js';
+import { withTimeout } from './async.js';
 
 const state = {
   socket: null,
@@ -809,9 +810,11 @@ async function captureMhtml(tabId) {
   const target = { tabId };
   await chrome.debugger.attach(target, '1.3');
   try {
-    const result = await chrome.debugger.sendCommand(target, 'Page.captureSnapshot', {
-      format: 'mhtml',
-    });
+    const result = await withTimeout(
+      chrome.debugger.sendCommand(target, 'Page.captureSnapshot', { format: 'mhtml' }),
+      15_000,
+      'scrape_snapshot_timeout',
+    );
     return new TextEncoder().encode(result.data);
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
@@ -826,24 +829,49 @@ async function scrapeRoutes(tabId, windowId, message) {
   const maxRoutes = message.maxRoutes ?? 20;
   const maxBytes = message.maxBytes ?? 50_000_000;
   const timeout = message.timeout ?? 15_000;
+  const deadline = Date.now() + (message.maxDuration ?? 120_000);
   const queue = [root.href];
   const seen = new Set();
   const files = [];
   let totalBytes = 0;
   let rootTitle = null;
+  let skippedRoutes = 0;
   try {
-    while (queue.length && seen.size < maxRoutes) {
+    while (queue.length && seen.size < maxRoutes && Date.now() < deadline) {
       const url = queue.shift();
       if (seen.has(url)) continue;
       seen.add(url);
-      const tab = await navigateTab(tabId, url, timeout);
+      let tab;
+      try {
+        tab = await navigateTab(tabId, url, Math.min(timeout, Math.max(1, deadline - Date.now())));
+      } catch (error) {
+        if (!files.length) throw error;
+        skippedRoutes += 1;
+        continue;
+      }
       if (seen.size === 1) rootTitle = tab.title ?? null;
       const [active] = await chrome.tabs.query({ active: true, windowId });
       if (active?.id !== tabId) throw new Error('paired_control_tab_not_active');
-      const mhtml = await captureMhtml(tabId);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      const screenshotUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
-      const screenshot = new Uint8Array(await (await fetch(screenshotUrl)).arrayBuffer());
+      let mhtml;
+      let screenshot;
+      try {
+        mhtml = await captureMhtml(tabId);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const screenshotUrl = await withTimeout(
+          chrome.tabs.captureVisibleTab(windowId, { format: 'png' }),
+          10_000,
+          'scrape_screenshot_timeout',
+        );
+        screenshot = new Uint8Array(await withTimeout(
+          (async () => (await fetch(screenshotUrl)).arrayBuffer())(),
+          10_000,
+          'scrape_screenshot_decode_timeout',
+        ));
+      } catch (error) {
+        if (!files.length) throw error;
+        skippedRoutes += 1;
+        continue;
+      }
       const nextBytes = mhtml.length + screenshot.length;
       if (totalBytes + nextBytes > maxBytes) {
         if (!files.length) throw new Error('scrape_too_large');
@@ -853,7 +881,11 @@ async function scrapeRoutes(tabId, windowId, message) {
       files.push({ name: `routes/${name}.mhtml`, data: bytesToBase64(mhtml) });
       files.push({ name: `screenshots/${name}.png`, data: bytesToBase64(screenshot) });
       totalBytes += nextBytes;
-      const links = (await page(tabId, { type: 'scrape_links' }))[0]?.result ?? [];
+      const links = (await withTimeout(
+        page(tabId, { type: 'scrape_links' }),
+        5_000,
+        'scrape_links_timeout',
+      ))[0]?.result ?? [];
       for (const link of links) {
         const candidate = new URL(link);
         if (candidate.origin === root.origin && !seen.has(candidate.href) && !queue.includes(candidate.href))
@@ -867,6 +899,8 @@ async function scrapeRoutes(tabId, windowId, message) {
       capturedAt: new Date().toISOString(),
       bytes: totalBytes,
       routes: files.length / 2,
+      skippedRoutes,
+      deadlineReached: Date.now() >= deadline,
     };
   } finally {
     await navigateTab(tabId, root.href, timeout).catch(() => {});

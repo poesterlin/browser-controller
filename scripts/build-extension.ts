@@ -10,6 +10,7 @@ for (const file of [
   'manifest.json',
   'command-cache.js',
   'control-tab.js',
+  'async.js',
   'background.js',
   'content.js',
   'options.html',

@@ -367,6 +367,7 @@ export class Supervisor {
               timeout: c.timeout,
               maxBytes: c.maxBytes,
               maxRoutes: c.maxRoutes,
+              maxDuration: c.maxDuration,
             });
           case 'click':
             {
@@ -438,7 +439,7 @@ export class Supervisor {
         return undefined;
       },
       c.type === 'scrape'
-        ? Math.max(120_000, (c.timeout ?? 15_000) * (c.maxRoutes ?? 20) + 30_000)
+        ? (c.maxDuration ?? 120_000) + 15_000
         : c.type === 'wait' || c.type === 'navigate'
         ? (c.timeout ?? 10_000) + 1_000
         : c.type === 'click'

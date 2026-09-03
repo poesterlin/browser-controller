@@ -17,6 +17,7 @@ export interface ScrapeOptions {
   timeout?: number;
   maxBytes?: number;
   maxRoutes?: number;
+  maxDuration?: number;
 }
 export interface DomOptions {
   locator?: Locator;

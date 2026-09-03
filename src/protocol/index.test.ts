@@ -252,6 +252,7 @@ describe('protocol validation', () => {
           url: 'https://example.com/',
           maxRoutes: 20,
           maxBytes: 50_000_000,
+          maxDuration: 120_000,
         },
       }).ok,
     ).toBe(true);
