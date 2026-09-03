@@ -37,6 +37,7 @@ browserctl select LOCATOR (--value VALUE | --option-text TEXT)
 browserctl wait LOCATOR [--state visible|attached|hidden] [--timeout MS]
 browserctl wait --tab-active [--timeout MS]
 browserctl wait --url URL [--timeout MS]
+browserctl wait --url-glob '**/karriere/**' [--timeout MS]
 browserctl evaluate --expression JAVASCRIPT
 browserctl screenshot [--full-page | --selector CSS] [--wait-for-active MS] --output FILE.png
 browserctl close
@@ -71,6 +72,8 @@ browserctl click --within-text Hardware-Basteln --role button --name Edit
 ```
 
 `dom --format summary` returns visible landmarks, headings, and controls, groups repeated items, and accepts `--item-limit`. A DOM locator can match repeated records; use `--offset` and `--limit` to retrieve a slice. Add zero-based `--nth` to choose one match; mutation commands reject ambiguous unindexed locators. Screenshot capture defaults to the viewport; full-page and selector captures scroll and stitch the active paired tab and restore its original position afterward. `--wait-for-active` waits for that tab instead of failing immediately.
+
+Summary links include their resolved `href`, and summary accounting distinguishes raw elements, unique groups, and returned groups. `click` automatically waits for native form submissions; use `--wait-navigation` when a non-submit control is also expected to navigate. URL waits accept either exact `--url` or `--url-glob` patterns where `*` stays within one path segment and `**` spans segments.
 
 `wait` accepts exactly one locator or `--url`. Locator waits default to `visible`. DOM output is limited to 50,000 characters by default; `--max-chars` accepts values up to 1,000,000 and reports when output was truncated.
 

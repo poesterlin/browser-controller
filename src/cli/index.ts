@@ -18,7 +18,7 @@ const command = args[0];
 const effectiveCommand = command === 'doctor' ? 'status' : command;
 const jsonOutput = args.includes('--json');
 const CLI_VERSION = '0.1.0';
-const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused']);
+const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation']);
 const DOM_FORMATS = new Set(['interactive', 'summary', 'clean_html', 'json', 'html']);
 const KNOWN_FLAGS = new Set([
   '--session', '-s', '--json', '--help', '-h', '--selector', '--role', '--name', '--label',
@@ -26,6 +26,7 @@ const KNOWN_FLAGS = new Set([
   '--full-page', '--value', '--state', '--expression', '--reason', '--format', '--text-chars', '--key', '--depth', '--count', '--changes',
   '--offset', '--limit', '--within-selector', '--within-role', '--within-name', '--within-label', '--within-text', '--within-exact',
   '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
+  '--url-glob', '--wait-navigation',
 ]);
 const invocation =
   process.env.BROWSER_CONTROLLER_COMMAND ??
@@ -198,12 +199,12 @@ function validateFlags() {
     navigate: ['--url', '--timeout'],
     dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit'],
     screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
-    click: [...locator, ...within, '--nth'],
+    click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout'],
     press: [...locator, ...within, '--key', '--nth'],
     fill: [...locator, ...within, '--value', '--nth'],
     type: [...locator, ...within, '--value', '--nth'],
     select: [...locator, ...within, '--value', '--option-text', '--nth'],
-    wait: [...locator, ...within, '--url', '--state', '--timeout', '--title', '--evaluate', '--count', '--value', '--changes', '--nth', '--tab-active', '--window-focused'],
+    wait: [...locator, ...within, '--url', '--url-glob', '--state', '--timeout', '--title', '--evaluate', '--count', '--value', '--changes', '--nth', '--tab-active', '--window-focused'],
     evaluate: ['--expression'],
     close: ['--reason'],
     status: [],
@@ -301,7 +302,7 @@ function browserCommand(pairing: boolean): Command {
         waitForActive: numberValue('--wait-for-active'),
       };
     case 'click':
-      return { type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth') };
+      return { type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), waitNavigation: args.includes('--wait-navigation') || undefined, timeout: numberValue('--timeout') };
     case 'press': {
       if (value('--key') === undefined) throw new Error('press requires --key KEY');
       return { type: 'press', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), key: value('--key')! };
@@ -335,6 +336,7 @@ function browserCommand(pairing: boolean): Command {
         within: withinLocator(),
         nth: numberValue('--nth'),
         url: value('--url'),
+        urlGlob: value('--url-glob'),
         title: value('--title'),
         evaluate: value('--evaluate'),
         count: numberValue('--count'),
@@ -450,6 +452,8 @@ async function main() {
       ? 305_000
       : request.type === 'wait'
         ? (request.timeout ?? 10_000) + 5_000
+        : request.type === 'click'
+          ? (request.timeout ?? 10_000) + 5_000
         : request.type === 'screenshot' && request.waitForActive
           ? request.waitForActive + 125_000
         : 15_000;
@@ -503,13 +507,15 @@ async function main() {
               const states = item.states?.length ? ` [${item.states.join(',')}]` : '';
               const value = item.value ? ` value="${item.value}"` : '';
               const hint = item.css ? ` (${item.tag}${item.css})` : ` (${item.tag})`;
-              console.log(`- ${item.role}${item.name ? ` "${item.name}"` : ''}${hint}${value}${states}`);
+              const count = item.count > 1 ? ` ×${item.count}` : '';
+              const href = item.href ? ` -> ${item.href}` : '';
+              console.log(`- ${item.role}${item.name ? ` "${item.name}"` : ''}${count}${hint}${value}${states}${href}`);
             }
           } else if (result?.format === 'json') console.log(JSON.stringify(result.node, null, 2));
           else console.log(typeof result === 'string' ? result : (result?.html ?? ''));
           if ((result?.format === 'interactive' || result?.format === 'summary') && result?.truncated)
             console.error(
-              `Interactive list truncated to ${result.items.length} of ${result.totalItems} elements; scope with a LOCATOR to see more.`,
+              `${result.format === 'summary' ? 'Summary' : 'Interactive list'} truncated to ${result.items.length} of ${result.uniqueItems ?? result.totalItems} ${result.format === 'summary' ? 'groups' : 'elements'} (${result.rawItems ?? result.totalItems} raw); scope or raise --item-limit.`,
             );
           else if (result?.truncated)
             console.error(

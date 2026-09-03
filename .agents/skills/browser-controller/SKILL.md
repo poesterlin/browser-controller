@@ -30,12 +30,13 @@ Ordinary browser commands safely create or reconnect the current session. Use `-
 ```sh
 browserctl navigate URL [--timeout MS] --json
 browserctl dom [LOCATOR] [--format interactive|summary|clean_html|json] [--offset N] [--limit N] [--item-limit N] [--nth N] [--max-chars N] [--text-chars N] [--depth N] --json
-browserctl click LOCATOR --json
+browserctl click LOCATOR [--wait-navigation] [--timeout MS] --json
 browserctl fill LOCATOR --value VALUE --json
 browserctl select LOCATOR (--value VALUE | --option-text TEXT) --json
 browserctl press LOCATOR --key 'ctrl+Enter' --json
 browserctl wait LOCATOR [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] --json
 browserctl wait --url URL [--timeout MS] --json
+browserctl wait --url-glob GLOB [--timeout MS] --json
 browserctl wait --title TEXT [--timeout MS] --json
 browserctl wait --evaluate EXPR [--timeout MS] --json
 browserctl wait --tab-active [--timeout MS] --json
@@ -62,7 +63,7 @@ browserctl click --within-text Hardware-Basteln --role button --name Edit --json
 
 `press` focuses the located element and sends a native key chord through Chrome DevTools Protocol. Modifiers are `ctrl`, `alt`, `shift`, and `meta`; join them with `+`. Chrome briefly attaches its debugger for each press and detaches immediately afterward.
 
-`wait` accepts exactly one locator, URL, title substring, page-world expression, `--tab-active`, or `--window-focused`. Prefer it to sleeps after navigation, clicks, and form submissions. Locator waits can require `--count N`, exact field/text `--value VALUE`, or `--changes` from the value observed when waiting starts; these predicates are mutually exclusive. Use `--evaluate` only when those built-ins cannot express the observable application state. URL waits use exact normalized URLs. Locator waits default to `visible`; `--state` only applies to locator waits. Results include the locator, requested state, matched and visible counts, and observed value where relevant. A hidden wait succeeds only when every matching element is hidden or no elements match.
+`wait` accepts exactly one locator, exact URL, URL glob, title substring, page-world expression, `--tab-active`, or `--window-focused`. Prefer it to sleeps after navigation, clicks, and form submissions. URL globs use `*` within one path segment and `**` across segments. Locator waits can require `--count N`, exact field/text `--value VALUE`, or `--changes` from the value observed when waiting starts; these predicates are mutually exclusive. Use `--evaluate` only when those built-ins cannot express the observable application state. Locator waits default to `visible`; `--state` only applies to locator waits. Results include the locator, requested state, matched and visible counts, and observed value where relevant. A hidden wait succeeds only when every matching element is hidden or no elements match. Clicks automatically wait for native form submissions; use `--wait-navigation` for other navigating controls.
 
 DOM output has five formats via `--format` (default `clean_html`):
 
