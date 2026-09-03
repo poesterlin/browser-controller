@@ -5,7 +5,8 @@ import type { BrowserSession } from './session.js';
 const fake = (): BrowserSession => ({
   capabilities: () => [],
   navigate: async () => {},
-  screenshot: async () => ({ data: '', mimeType: 'image/png', width: 0, height: 0 }),
+    screenshot: async () => ({ data: '', mimeType: 'image/png', width: 0, height: 0 }),
+    scrape: async () => ({ files: [], url: '', title: null, capturedAt: '', bytes: 0, routes: 0 }),
   dom: async () => ({ format: 'clean_html', html: '' }),
   click: async () => {},
   press: async () => {},

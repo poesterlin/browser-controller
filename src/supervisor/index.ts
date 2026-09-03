@@ -37,6 +37,7 @@ const capabilities = [
   'screenshot.viewport',
   'screenshot.fullPage',
   'screenshot.element',
+  'scrape.snapshot',
 ] as const;
 export class Supervisor {
   readonly token = token();
@@ -324,7 +325,9 @@ export class Supervisor {
         return success(id, { action: 'closed', session: s.id });
       }
       const required =
-        c.type === 'screenshot'
+        c.type === 'scrape'
+          ? 'scrape.snapshot'
+          : c.type === 'screenshot'
           ? c.fullPage
             ? 'screenshot.fullPage'
             : c.selector
@@ -358,6 +361,13 @@ export class Supervisor {
             });
           case 'screenshot':
             return s.adapter.screenshot({ fullPage: c.fullPage, selector: c.selector, waitForActive: c.waitForActive });
+          case 'scrape':
+            return s.adapter.scrape({
+              url: c.url,
+              timeout: c.timeout,
+              maxBytes: c.maxBytes,
+              maxRoutes: c.maxRoutes,
+            });
           case 'click':
             {
               const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
@@ -427,7 +437,9 @@ export class Supervisor {
         }
         return undefined;
       },
-      c.type === 'wait' || c.type === 'navigate'
+      c.type === 'scrape'
+        ? Math.max(120_000, (c.timeout ?? 15_000) * (c.maxRoutes ?? 20) + 30_000)
+        : c.type === 'wait' || c.type === 'navigate'
         ? (c.timeout ?? 10_000) + 1_000
         : c.type === 'click'
           ? (c.timeout ?? 10_000) + 1_000
@@ -556,6 +568,7 @@ function makeExtensionSession(
     capabilities: () => [...capabilities],
     navigate: (u, timeout) => call('navigate', { url: u, timeout }),
     screenshot: (o) => call('screenshot', o),
+    scrape: (o) => call('scrape', o),
     dom: (o) => call('dom', o),
     click: (locator, within, nth, options) => call('click', { locator, within, nth, ...options }),
     press: (locator, key, within, nth) => call('press', { locator, key, within, nth }),

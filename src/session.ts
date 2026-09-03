@@ -5,11 +5,18 @@ import type {
   EvaluateResult,
   Locator,
   ScreenshotResult,
+  ScrapeResult,
 } from './protocol/index.js';
 export interface ScreenshotOptions {
   fullPage?: boolean;
   selector?: string;
   waitForActive?: number;
+}
+export interface ScrapeOptions {
+  url?: string;
+  timeout?: number;
+  maxBytes?: number;
+  maxRoutes?: number;
 }
 export interface DomOptions {
   locator?: Locator;
@@ -46,6 +53,7 @@ export interface BrowserSession {
   capabilities(): readonly Capability[];
   navigate(url: string, timeout?: number): Promise<unknown>;
   screenshot(options: ScreenshotOptions): Promise<ScreenshotResult>;
+  scrape(options: ScrapeOptions): Promise<ScrapeResult>;
   dom(options: DomOptions): Promise<DomResult>;
   click(locator: Locator, within?: Locator, nth?: number, options?: { waitNavigation?: boolean; timeout?: number }): Promise<unknown>;
   press(locator: Locator, key: string, within?: Locator, nth?: number): Promise<unknown>;

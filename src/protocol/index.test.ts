@@ -240,4 +240,28 @@ describe('protocol validation', () => {
       }).ok,
     ).toBe(true);
   });
+  test('validates bounded page scrapes', () => {
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrape',
+        kind: 'command',
+        command: {
+          type: 'scrape',
+          session: 's',
+          url: 'https://example.com/',
+          maxRoutes: 20,
+          maxBytes: 50_000_000,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'unbounded-scrape',
+        kind: 'command',
+        command: { type: 'scrape', session: 's', maxRoutes: 51 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+  });
 });

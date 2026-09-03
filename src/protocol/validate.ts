@@ -28,6 +28,7 @@ const COMMAND_TYPES = new Set<CommandType>([
   'list',
   'status',
   'navigate',
+  'scrape',
   'screenshot',
   'dom',
   'click',
@@ -53,6 +54,8 @@ const INTEGER_RANGES: Array<[(c: RecordInput) => unknown, number, number, string
   [(c) => c.nth, 0, Number.MAX_SAFE_INTEGER, 'nth must be a non-negative integer'],
   [(c) => c.itemLimit, 1, 500, 'itemLimit must be between 1 and 500'],
   [(c) => c.count, 0, 100_000, 'count must be between 0 and 100000'],
+  [(c) => c.maxBytes, 1_000_000, 100_000_000, 'maxBytes must be between 1000000 and 100000000'],
+  [(c) => c.maxRoutes, 1, 50, 'maxRoutes must be between 1 and 50'],
 ];
 
 function rangeFailure(c: RecordInput, rule: (typeof INTEGER_RANGES)[number]): FailureResult | undefined {
@@ -68,6 +71,8 @@ function validateCommon(c: RecordInput, type: CommandType): FailureResult | unde
     return { ok: false, code: 'invalid_request', message: 'session is required' };
   if (type === 'navigate' && !string(c.url))
     return { ok: false, code: 'invalid_request', message: 'url is required' };
+  if (type === 'scrape' && c.url !== undefined && !string(c.url))
+    return { ok: false, code: 'invalid_request', message: 'url must be a string' };
   if ((type === 'dom' || type === 'screenshot') && c.selector !== undefined && !string(c.selector))
     return { ok: false, code: 'invalid_request', message: 'selector must be a string' };
   if (type === 'press' && !string(c.key))

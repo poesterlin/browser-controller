@@ -95,6 +95,22 @@ async function page(tabId, message) {
         delete window[key];
         return { restored };
       }
+      if (m.type === 'scrape_links') {
+        const origin = location.origin;
+        return [...document.querySelectorAll('a[href]')]
+          .map((link) => {
+            try {
+              const url = new URL(link.href, location.href);
+              if (url.origin !== origin || !['http:', 'https:'].includes(url.protocol)) return null;
+              url.hash = '';
+              url.search = '';
+              return url.href;
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean);
+      }
 
       const normalize = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
       const matches = (actual, expected, exact = false) => {
@@ -753,6 +769,110 @@ async function clickAndWait(tabId, message) {
   }
 }
 
+async function navigateTab(tabId, url, timeout) {
+  const tab = await chrome.tabs.update(tabId, { url });
+  if (tab?.status === 'complete') return chrome.tabs.get(tabId);
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const listener = (id, info) => {
+      if (id !== tabId || info.status !== 'complete') return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(() => {
+      if (settled) return;
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error('navigation_timeout'));
+    }, timeout);
+  });
+  return chrome.tabs.get(tabId);
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
+
+function routeName(url, index) {
+  const parsed = new URL(url);
+  const slug = parsed.pathname === '/'
+    ? 'index'
+    : parsed.pathname.replace(/^\/+|\/+$/g, '').replace(/[^a-z0-9._-]+/gi, '-').slice(0, 100) || 'index';
+  return `${String(index + 1).padStart(3, '0')}-${slug}`;
+}
+
+async function captureMhtml(tabId) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+  try {
+    const result = await chrome.debugger.sendCommand(target, 'Page.captureSnapshot', {
+      format: 'mhtml',
+    });
+    return new TextEncoder().encode(result.data);
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+async function scrapeRoutes(tabId, windowId, message) {
+  const original = await chrome.tabs.get(tabId);
+  const requested = message.url ?? original.url;
+  const root = new URL(requested);
+  if (!['http:', 'https:'].includes(root.protocol)) throw new Error('scrape_url_not_http');
+  const maxRoutes = message.maxRoutes ?? 20;
+  const maxBytes = message.maxBytes ?? 50_000_000;
+  const timeout = message.timeout ?? 15_000;
+  const queue = [root.href];
+  const seen = new Set();
+  const files = [];
+  let totalBytes = 0;
+  let rootTitle = null;
+  try {
+    while (queue.length && seen.size < maxRoutes) {
+      const url = queue.shift();
+      if (seen.has(url)) continue;
+      seen.add(url);
+      const tab = await navigateTab(tabId, url, timeout);
+      if (seen.size === 1) rootTitle = tab.title ?? null;
+      const [active] = await chrome.tabs.query({ active: true, windowId });
+      if (active?.id !== tabId) throw new Error('paired_control_tab_not_active');
+      const mhtml = await captureMhtml(tabId);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const screenshotUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+      const screenshot = new Uint8Array(await (await fetch(screenshotUrl)).arrayBuffer());
+      const nextBytes = mhtml.length + screenshot.length;
+      if (totalBytes + nextBytes > maxBytes) {
+        if (!files.length) throw new Error('scrape_too_large');
+        break;
+      }
+      const name = routeName(url, seen.size - 1);
+      files.push({ name: `routes/${name}.mhtml`, data: bytesToBase64(mhtml) });
+      files.push({ name: `screenshots/${name}.png`, data: bytesToBase64(screenshot) });
+      totalBytes += nextBytes;
+      const links = (await page(tabId, { type: 'scrape_links' }))[0]?.result ?? [];
+      for (const link of links) {
+        const candidate = new URL(link);
+        if (candidate.origin === root.origin && !seen.has(candidate.href) && !queue.includes(candidate.href))
+          queue.push(candidate.href);
+      }
+    }
+    return {
+      files,
+      url: root.href,
+      title: rootTitle,
+      capturedAt: new Date().toISOString(),
+      bytes: totalBytes,
+      routes: files.length / 2,
+    };
+  } finally {
+    await navigateTab(tabId, root.href, timeout).catch(() => {});
+  }
+}
+
 async function execute(message) {
   if (!state.tabId)
     return {
@@ -773,6 +893,11 @@ async function execute(message) {
         message.tabActive ? 'tab-active' : 'window-focused',
         message.timeout ?? 10_000,
       );
+    } else if (message.type === 'scrape') {
+      const controlTab = await chrome.tabs.get(state.tabId);
+      const [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
+      if (active?.id !== state.tabId) throw new Error('paired_control_tab_not_active');
+      result = await scrapeRoutes(state.tabId, controlTab.windowId, message);
     } else if (message.type === 'click') {
       result = await clickAndWait(state.tabId, message);
     } else if (message.type === 'press') {

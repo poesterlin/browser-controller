@@ -9,6 +9,7 @@ export type Capability =
   | 'evaluate'
   | 'press'
   | 'select'
+  | 'scrape.snapshot'
   | 'screenshot.viewport'
   | 'screenshot.fullPage'
   | 'screenshot.element';
@@ -23,6 +24,14 @@ export type Command =
   | { type: 'list' }
   | { type: 'status' }
   | { type: 'navigate'; session: string; url: string; timeout?: number }
+  | {
+      type: 'scrape';
+      session: string;
+      url?: string;
+      timeout?: number;
+      maxBytes?: number;
+      maxRoutes?: number;
+    }
   | { type: 'screenshot'; session: string; fullPage?: boolean; selector?: string; waitForActive?: number }
   | {
       type: 'dom';
@@ -139,6 +148,14 @@ export interface ScreenshotResult {
   width: number;
   height: number;
 }
+export interface ScrapeResult {
+  files: Array<{ name: string; data: string }>;
+  url: string;
+  title: string | null;
+  capturedAt: string;
+  bytes: number;
+  routes: number;
+}
 export type DomFormat = 'interactive' | 'summary' | 'clean_html' | 'json' | 'html';
 export interface DomInteractiveItem {
   role: string;
@@ -170,5 +187,3 @@ export interface DomResult {
 export interface EvaluateResult {
   value: unknown;
 }
-
-
