@@ -20,4 +20,11 @@ describe('DOM snapshot history', () => {
     history.record({ format: 'clean_html', html: 'before' });
     expect(history.record({ format: 'clean_html', html: 'after' }, true).diff?.baseline).toBe(false);
   });
+
+  test('keeps unrelated snapshot shapes in separate histories', () => {
+    const history = new DomSnapshotHistory();
+    history.record({ format: 'interactive', items: [] }, false, 'interactive:page');
+    expect(history.record({ format: 'clean_html', html: '<main />' }, true, 'clean:main').diff)
+      .toEqual({ added: [], removed: [], changed: false, baseline: true });
+  });
 });

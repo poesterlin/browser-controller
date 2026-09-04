@@ -349,8 +349,8 @@ async function page(tabId, message) {
           centerX: bounds.x + bounds.width / 2 + (m.offsetX ?? 0),
           centerY: bounds.y + bounds.height / 2 + (m.offsetY ?? 0),
           submissionExpected:
-            (element instanceof HTMLButtonElement && (element.type === 'submit' || !!element.form)) ||
-            (element instanceof HTMLInputElement && ['submit', 'image'].includes(element.type)),
+            (element instanceof HTMLButtonElement && !!element.form && element.type === 'submit') ||
+            (element instanceof HTMLInputElement && !!element.form && ['submit', 'image'].includes(element.type)),
         };
       }
       if (m.type === 'bounds') return { action: 'bounded', ...elementBounds(element) };

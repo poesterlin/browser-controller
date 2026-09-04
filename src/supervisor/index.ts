@@ -31,6 +31,7 @@ const capabilities = [
   'dom',
   'click',
   'fill',
+  'type',
   'select',
   'scroll',
   'bounds',
@@ -636,7 +637,7 @@ function makeExtensionSession(
         if (m.ok) {
           if (typeof m.result?.chunks === 'number' && m.result.chunks !== p.chunks.length)
             p.reject(new SessionError('artifact_transport_error', 'incomplete artifact transfer'));
-          else p.resolve({ ...m.result, ...(p.chunks.length ? { chunks: p.chunks } : {}) });
+          else p.resolve(p.chunks.length ? { ...m.result, chunks: p.chunks } : m.result);
         }
         else
           p.reject(
@@ -672,7 +673,18 @@ function makeExtensionSession(
     navigate: (u, timeout) => call('navigate', { url: u, timeout }),
     screenshot: (o) => call('screenshot', o),
     scrape: (o) => call('scrape', o),
-    dom: async (o) => domHistory.record(await call('dom', o), o.diff),
+    dom: async (o) => domHistory.record(
+      await call('dom', o),
+      o.diff,
+      JSON.stringify({
+        format: o.format ?? 'clean_html',
+        locator: o.locator ?? o.selector,
+        within: o.within,
+        nth: o.nth,
+        offset: o.offset,
+        limit: o.limit,
+      }),
+    ),
     click: (locator, within, nth, options) => call('click', { locator, within, nth, ...options }),
     press: (locator, key, within, nth) => call('press', { locator, key, within, nth }),
     fill: (locator, text, within, nth) => call('fill', { locator, text, within, nth }),

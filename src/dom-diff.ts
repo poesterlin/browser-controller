@@ -6,12 +6,12 @@ function lines(result: DomResult) {
 }
 
 export class DomSnapshotHistory {
-  private previous?: Set<string>;
+  private previous = new Map<string, Set<string>>();
 
-  record(result: DomResult, includeDiff = false): DomResult {
+  record(result: DomResult, includeDiff = false, key: string = result.format): DomResult {
     const current = new Set(lines(result));
-    const previous = this.previous;
-    this.previous = current;
+    const previous = this.previous.get(key);
+    this.previous.set(key, current);
     if (!includeDiff) return result;
     if (!previous)
       return { ...result, diff: { added: [], removed: [], changed: false, baseline: true } };
