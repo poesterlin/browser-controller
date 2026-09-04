@@ -318,4 +318,48 @@ describe('CLI transport', () => {
       },
     });
   });
+
+  test('parses scroll, real type, and coordinate click actions', async () => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'browserctl-cli-test-'));
+    const runtime = path.join(temp, 'browser-controller');
+    await fs.mkdir(runtime, { recursive: true });
+    const token = 'a'.repeat(64);
+    const http = await listeningServer();
+    const server = new WebSocketServer({ server: http });
+    cleanups.push(
+      () => new Promise<void>((resolve) => server.close(() => http.close(() => resolve()))),
+      () => fs.rm(temp, { recursive: true, force: true }),
+    );
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server address');
+    await fs.writeFile(
+      path.join(runtime, 'connection.json'),
+      JSON.stringify({ url: `ws://127.0.0.1:${address.port}`, pid: process.pid, token, version: 1 }),
+    );
+    const commands: unknown[] = [];
+    server.on('connection', (socket) => socket.on('message', (raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.kind === 'hello')
+        return socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: {} }));
+      commands.push(message.command);
+      socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: { action: message.command.type } }));
+    }));
+    const invocations = [
+      ['scroll', '--text', 'More', '--into-view', '--json'],
+      ['type', '--label', 'Search', '--value', 'kebap', '--clear', '--delay', '25', '--submit', '--json'],
+      ['click', '--at', '120,240', '--button', 'right', '--json'],
+    ];
+    for (const invocationArgs of invocations) {
+      const child = spawn(process.execPath, [path.join(import.meta.dir, 'index.ts'), ...invocationArgs], {
+        env: { ...process.env, XDG_RUNTIME_DIR: temp },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      expect(await new Promise<number | null>((resolve) => child.once('close', resolve))).toBe(0);
+    }
+    expect(commands).toEqual([
+      { type: 'scroll', session: 'last', locator: { by: 'text', value: 'More', exact: false }, intoView: true },
+      { type: 'type', session: 'last', locator: { by: 'label', value: 'Search', exact: false }, text: 'kebap', delay: 25, clear: true, submit: true },
+      { type: 'click', session: 'last', button: 'right', x: 120, y: 240 },
+    ]);
+  });
 });

@@ -18,7 +18,7 @@ const command = args[0];
 const effectiveCommand = command === 'doctor' ? 'status' : command;
 const jsonOutput = args.includes('--json');
 const CLI_VERSION = '0.1.0';
-const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window', '--no-auto-pair']);
+const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window', '--no-auto-pair', '--double', '--clear', '--submit', '--into-view', '--diff', '--from-exact', '--to-exact']);
 const DOM_FORMATS = new Set(['interactive', 'summary', 'clean_html', 'json', 'html']);
 const KNOWN_FLAGS = new Set([
   '--session', '-s', '--json', '--help', '-h', '--selector', '--role', '--name', '--label',
@@ -28,6 +28,11 @@ const KNOWN_FLAGS = new Set([
   '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
   '--url-glob', '--wait-navigation',
   '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window', '--no-auto-pair',
+  '--direction', '--amount', '--delta-x', '--delta-y', '--into-view', '--duration-ms', '--diff',
+  '--button', '--double', '--modifier', '--offset-x', '--offset-y', '--hold-ms', '--at', '--x', '--y',
+  '--clear', '--submit', '--screenshot', '--intent', '--values',
+  '--from-selector', '--from-role', '--from-name', '--from-label', '--from-text', '--from-exact', '--from-nth',
+  '--to-selector', '--to-role', '--to-name', '--to-label', '--to-text', '--to-exact', '--to-nth', '--to-x', '--to-y',
 ]);
 const invocation =
   process.env.BROWSER_CONTROLLER_COMMAND ??
@@ -190,6 +195,12 @@ const numberValue = (...names: string[]) => {
   if (!Number.isFinite(parsed)) throw new Error(`${names[0]} must be a number`);
   return parsed;
 };
+const values = (...names: string[]) => {
+  const found: string[] = [];
+  for (let index = 0; index < args.length; index += 1)
+    if (names.includes(args[index]) && args[index + 1] !== undefined) found.push(args[index + 1]);
+  return found;
+};
 
 function validateFlags() {
   const common = ['--session', '-s', '--json', '--help', '-h', '--no-auto-pair'];
@@ -198,14 +209,19 @@ function validateFlags() {
   const byCommand: Record<string, string[]> = {
     start: ['--name', '--adapter'],
     navigate: ['--url', '--timeout'],
-    dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit'],
+    dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit', '--diff', '--screenshot', '--output'],
     screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
     scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window'],
-    click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout'],
-    press: [...locator, ...within, '--key', '--nth'],
-    fill: [...locator, ...within, '--value', '--nth'],
-    type: [...locator, ...within, '--value', '--nth'],
-    select: [...locator, ...within, '--value', '--option-text', '--nth'],
+    click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout', '--button', '--double', '--modifier', '--offset-x', '--offset-y', '--hold-ms', '--at', '--x', '--y', '--screenshot', '--intent'],
+    press: [...locator, ...within, '--key', '--nth', '--screenshot', '--intent'],
+    fill: [...locator, ...within, '--value', '--nth', '--screenshot', '--intent'],
+    type: [...locator, ...within, '--value', '--nth', '--delay', '--clear', '--submit', '--screenshot', '--intent'],
+    select: [...locator, ...within, '--value', '--values', '--option-text', '--nth', '--screenshot', '--intent'],
+    scroll: [...locator, ...within, '--nth', '--direction', '--amount', '--delta-x', '--delta-y', '--into-view', '--screenshot', '--intent'],
+    bounds: [...locator, ...within, '--nth'],
+    highlight: [...locator, ...within, '--nth', '--duration-ms'],
+    drag: ['--from-selector', '--from-role', '--from-name', '--from-label', '--from-text', '--from-exact', '--from-nth', '--to-selector', '--to-role', '--to-name', '--to-label', '--to-text', '--to-exact', '--to-nth', '--to-x', '--to-y', '--screenshot', '--intent'],
+    activate: [],
     wait: [...locator, ...within, '--url', '--url-glob', '--state', '--timeout', '--title', '--evaluate', '--count', '--value', '--changes', '--nth', '--tab-active', '--window-focused'],
     evaluate: ['--expression'],
     close: ['--reason'],
@@ -257,6 +273,38 @@ function withinLocator(): Locator | undefined {
   return candidates[0];
 }
 
+function prefixedLocator(prefix: 'from' | 'to'): Locator | undefined {
+  const exact = args.includes(`--${prefix}-exact`);
+  const candidates: Locator[] = [];
+  const selector = value(`--${prefix}-selector`);
+  const role = value(`--${prefix}-role`);
+  const name = value(`--${prefix}-name`);
+  const label = value(`--${prefix}-label`);
+  const text = value(`--${prefix}-text`);
+  if (selector) candidates.push({ by: 'css', value: selector });
+  if (role) candidates.push({ by: 'role', value: role, name, exact });
+  if (label) candidates.push({ by: 'label', value: label, exact });
+  if (text) candidates.push({ by: 'text', value: text, exact });
+  if (name && !role) throw new Error(`--${prefix}-name requires --${prefix}-role`);
+  if (candidates.length !== 1 && prefix === 'from') throw new Error('drag requires exactly one source locator');
+  if (candidates.length > 1) throw new Error(`use exactly one ${prefix} locator`);
+  return candidates[0];
+}
+
+function clickCoordinates() {
+  const at = value('--at');
+  if (at) {
+    const parts = at.split(',').map(Number);
+    if (parts.length !== 2 || parts.some((part) => !Number.isFinite(part)))
+      throw new Error('--at must be X,Y');
+    return { x: parts[0], y: parts[1] };
+  }
+  const x = numberValue('--x');
+  const y = numberValue('--y');
+  if ((x === undefined) !== (y === undefined)) throw new Error('click coordinates require both --x and --y');
+  return x === undefined ? {} : { x, y };
+}
+
 function browserCommand(pairing: boolean): Command {
   if (pairing) return { type: 'extension_pair' };
   const session = value('--session', '-s') ?? 'last';
@@ -291,6 +339,8 @@ function browserCommand(pairing: boolean): Command {
         limit: numberValue('--limit'),
         nth: numberValue('--nth'),
         itemLimit: numberValue('--item-limit'),
+        diff: args.includes('--diff') || undefined,
+        screenshotAfter: value('--screenshot') !== undefined || undefined,
       };
     }
     case 'screenshot':
@@ -315,13 +365,20 @@ function browserCommand(pairing: boolean): Command {
         dedicatedWindow: args.includes('--dedicated-window'),
       };
     case 'click':
-      return { type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), waitNavigation: args.includes('--wait-navigation') || undefined, timeout: numberValue('--timeout') };
+      return {
+        type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'),
+        waitNavigation: args.includes('--wait-navigation') || undefined, timeout: numberValue('--timeout'),
+        button: value('--button') as 'left' | 'right' | 'middle' | undefined,
+        double: args.includes('--double') || undefined,
+        modifiers: values('--modifier').length ? values('--modifier') as Array<'ctrl' | 'alt' | 'shift' | 'meta'> : undefined,
+        offsetX: numberValue('--offset-x'), offsetY: numberValue('--offset-y'), holdMs: numberValue('--hold-ms'),
+        ...clickCoordinates(), screenshotAfter: value('--screenshot') !== undefined || undefined, intent: value('--intent'),
+      };
     case 'press': {
       if (value('--key') === undefined) throw new Error('press requires --key KEY');
-      return { type: 'press', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), key: value('--key')! };
+      return { type: 'press', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'), key: value('--key')!, screenshotAfter: value('--screenshot') !== undefined || undefined, intent: value('--intent') };
     }
     case 'fill':
-    case 'type':
       if (value('--value') === undefined) throw new Error('fill requires --value VALUE');
       return {
         type: 'fill',
@@ -330,17 +387,63 @@ function browserCommand(pairing: boolean): Command {
         within: withinLocator(),
         nth: numberValue('--nth'),
         text: value('--value')!,
+        screenshotAfter: value('--screenshot') !== undefined || undefined,
+        intent: value('--intent'),
+      };
+    case 'type':
+      if (value('--value') === undefined) throw new Error('type requires --value VALUE');
+      return {
+        type: 'type', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'),
+        text: value('--value')!, delay: numberValue('--delay'), clear: args.includes('--clear') || undefined,
+        submit: args.includes('--submit') || undefined, screenshotAfter: value('--screenshot') !== undefined || undefined,
+        intent: value('--intent'),
       };
     case 'select':
+      {
+      const repeatedValues = values('--value');
+      const commaValues = value('--values')?.split(',').map((item) => item.trim()).filter(Boolean);
       return {
         type: 'select',
         session,
         locator: commandLocator(),
         within: withinLocator(),
         nth: numberValue('--nth'),
-        value: value('--value'),
+        value: repeatedValues.length === 1 && !commaValues ? repeatedValues[0] : undefined,
+        values: commaValues ?? (repeatedValues.length > 1 ? repeatedValues : undefined),
         optionText: value('--option-text'),
+        screenshotAfter: value('--screenshot') !== undefined || undefined,
+        intent: value('--intent'),
       };
+      }
+    case 'scroll':
+      return {
+        type: 'scroll', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'),
+        direction: value('--direction') as 'up' | 'down' | 'left' | 'right' | undefined,
+        amount: numberValue('--amount'), deltaX: numberValue('--delta-x'), deltaY: numberValue('--delta-y'),
+        intoView: args.includes('--into-view') || undefined, screenshotAfter: value('--screenshot') !== undefined || undefined,
+        intent: value('--intent'),
+      };
+    case 'bounds': {
+      const locator = commandLocator();
+      if (!locator) throw new Error('bounds requires a locator');
+      return { type: 'bounds', session, locator, within: withinLocator(), nth: numberValue('--nth') };
+    }
+    case 'highlight': {
+      const locator = commandLocator();
+      if (!locator) throw new Error('highlight requires a locator');
+      return { type: 'highlight', session, locator, within: withinLocator(), nth: numberValue('--nth'), duration: numberValue('--duration-ms') };
+    }
+    case 'drag': {
+      const from = prefixedLocator('from')!;
+      const to = prefixedLocator('to');
+      return {
+        type: 'drag', session, from, to, fromNth: numberValue('--from-nth'), toNth: numberValue('--to-nth'),
+        toX: numberValue('--to-x'), toY: numberValue('--to-y'), screenshotAfter: value('--screenshot') !== undefined || undefined,
+        intent: value('--intent'),
+      };
+    }
+    case 'activate':
+      return { type: 'activate', session };
     case 'wait':
       return {
         type: 'wait',
@@ -377,11 +480,17 @@ function usage(topic?: string) {
   --text TEXT [--exact]`;
   const details: Record<string, string> = {
     navigate: `usage: ${invocation} navigate URL [--timeout MS] [--session ID] [--json]\n\nExample: ${invocation} navigate https://example.com --timeout 15000`,
-    dom: `usage: ${invocation} dom [LOCATOR] [--format interactive|summary|clean_html|json] [--offset N] [--limit N] [--item-limit N] [--nth N] [--max-chars N] [--text-chars N] [--depth N] [--session ID] [--json]\n\n${locator}\n\nScope any locator with --within-selector CSS, --within-role ROLE [--within-name NAME], --within-label LABEL, or --within-text TEXT. Summary output groups repeated items and defaults to 100 groups. --nth is zero-based.`,
-    click: `usage: ${invocation} click LOCATOR [--session ID] [--json]\n\n${locator}\n\nExample: ${invocation} click --role button --name Save --exact`,
-    press: `usage: ${invocation} press LOCATOR --key KEY [--session ID] [--json]\n\n${locator}\n\nKEY combines modifiers with '+': Enter, Tab, Escape, ctrl+Enter, ctrl+a, Shift+Tab\n\nExample: ${invocation} press --selector '#chat-input' --key ctrl+Enter`,
+    dom: `usage: ${invocation} dom [LOCATOR] [--format interactive|summary|clean_html|json] [--diff] [--output FILE] [--screenshot FILE] [--offset N] [--limit N] [--item-limit N] [--nth N] [--max-chars N] [--text-chars N] [--depth N] [--session ID] [--json]\n\n${locator}\n\nScope any locator with --within-selector CSS, --within-role ROLE [--within-name NAME], --within-label LABEL, or --within-text TEXT. Summary output groups repeated items and defaults to 100 groups. --nth is zero-based.`,
+    click: `usage: ${invocation} click (LOCATOR | --at X,Y) [--button left|right|middle] [--double] [--modifier ctrl|alt|shift|meta] [--offset-x N] [--offset-y N] [--hold-ms N] [--screenshot FILE] [--session ID] [--json]\n\n${locator}\n\nExample: ${invocation} click --role button --name Save --exact`,
+    press: `usage: ${invocation} press [LOCATOR] --key KEY [--screenshot FILE] [--session ID] [--json]\n\n${locator}\n\nWithout a locator, sends the chord to the active element/page. KEY combines modifiers with '+': Enter, Tab, Escape, ctrl+Enter, ctrl+a, Shift+Tab`,
     fill: `usage: ${invocation} fill LOCATOR --value VALUE [--session ID] [--json]\n\n${locator}\n\nExample: ${invocation} fill --label URL --value https://example.com`,
-    select: `usage: ${invocation} select LOCATOR (--value VALUE | --option-text TEXT) [--nth N] [--session ID] [--json]\n\n${locator}\n\nExample: ${invocation} select --label Kind --value atom`,
+    type: `usage: ${invocation} type LOCATOR --value TEXT [--clear] [--submit] [--delay MS] [--screenshot FILE] [--json]\n\n${locator}`,
+    select: `usage: ${invocation} select LOCATOR (--value VALUE... | --values A,B | --option-text TEXT) [--nth N] [--session ID] [--json]\n\n${locator}\n\nRepeat --value for a multi-select.`,
+    scroll: `usage: ${invocation} scroll [LOCATOR] (--direction up|down|left|right [--amount PX] | --delta-x N --delta-y N | --into-view) [--screenshot FILE] [--json]\n\n${locator}`,
+    bounds: `usage: ${invocation} bounds LOCATOR [--json]\n\n${locator}`,
+    highlight: `usage: ${invocation} highlight LOCATOR [--duration-ms 2000] [--json]\n\n${locator}`,
+    drag: `usage: ${invocation} drag --from-(selector|role|label|text) VALUE (--to-(selector|role|label|text) VALUE | --to-x N --to-y N) [--screenshot FILE] [--json]`,
+    activate: `usage: ${invocation} activate [--json]\n\nBrings only the explicitly paired tab and its window to the foreground.`,
     wait: `usage: ${invocation} wait (LOCATOR | --url URL | --title TEXT | --evaluate EXPR) [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] [--session ID] [--json]\n\n${locator}\n\nLocator waits can require an exact match count, an exact field/text value, or a change from the value observed when waiting began. URL waits are exact; title matching is partial; evaluate expressions are polled until truthy.\n\nExamples:\n  ${invocation} wait --selector '.result' --count 3\n  ${invocation} wait --label Status --value Complete\n  ${invocation} wait --role log --changes\n  ${invocation} wait --evaluate "document.querySelectorAll('[class*=markdown]').length > 0" --timeout 20000`,
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
     screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
@@ -402,8 +511,14 @@ Commands:
   dom              Read bounded page markup
   click            Click an element
   fill             Replace a field value
+  type             Type real keystrokes into a field
   select           Select an option
   press            Dispatch a key or key chord to an element
+  scroll           Scroll the page, a container, or an element into view
+  bounds           Report an element's viewport and page bounds
+  highlight        Temporarily highlight an element
+  drag             Drag to a locator or viewport coordinates
+  activate         Focus only the paired tab and window
   wait             Wait for a locator or URL
   evaluate         Evaluate page-world JavaScript
   screenshot       Save a viewport, full-page, or element image
@@ -443,7 +558,7 @@ async function main() {
     !value('--session', '-s') &&
     (request.type === 'start'
       ? !request.adapter
-      : ['navigate', 'dom', 'screenshot', 'scrape', 'click', 'fill', 'select', 'press', 'wait', 'evaluate'].includes(request.type));
+      : ['navigate', 'dom', 'screenshot', 'scrape', 'click', 'fill', 'type', 'select', 'press', 'scroll', 'bounds', 'highlight', 'drag', 'activate', 'wait', 'evaluate'].includes(request.type));
   const autoStart =
     pairing ||
     effectiveCommand === 'start' ||
@@ -568,17 +683,37 @@ async function main() {
             command: request,
           }));
           return;
-        } else if (command === 'dom') {
+        }
+        if (message.result?.screenshot && value('--screenshot')) {
+          const screenshot = message.result.screenshot;
+          const bytes = Buffer.from(screenshot.data, 'base64');
+          writeFileSync(value('--screenshot')!, bytes);
+          message.result.screenshot = {
+            output: value('--screenshot'),
+            bytes: bytes.length,
+            width: screenshot.width,
+            height: screenshot.height,
+          };
+        }
+        if (command === 'dom') {
           const result = message.result;
-          if (jsonOutput) printResult('dom', result);
+          const domOutput = value('--output');
+          if (domOutput) {
+            const content = result.format === 'json'
+              ? `${JSON.stringify(result.node, null, 2)}\n`
+              : result.html ?? `${JSON.stringify(result, null, 2)}\n`;
+            writeFileSync(domOutput, content);
+            printResult('dom-file', { output: domOutput, bytes: Buffer.byteLength(content), format: result.format });
+          } else if (jsonOutput) printResult('dom', result);
           else if (result?.format === 'interactive' || result?.format === 'summary') {
             for (const item of result.items ?? []) {
               const states = item.states?.length ? ` [${item.states.join(',')}]` : '';
+              const viewport = item.inViewport === false ? ' [offscreen]' : '';
               const value = item.value ? ` value="${item.value}"` : '';
               const hint = item.css ? ` (${item.tag}${item.css})` : ` (${item.tag})`;
               const count = item.count > 1 ? ` ×${item.count}` : '';
               const href = item.href ? ` -> ${item.href}` : '';
-              console.log(`- ${item.role}${item.name ? ` "${item.name}"` : ''}${count}${hint}${value}${states}${href}`);
+              console.log(`- ${item.role}${item.name ? ` "${item.name}"` : ''}${count}${hint}${value}${states}${viewport}${href}`);
             }
           } else if (result?.format === 'json') console.log(JSON.stringify(result.node, null, 2));
           else console.log(typeof result === 'string' ? result : (result?.html ?? ''));
@@ -590,6 +725,14 @@ async function main() {
             console.error(
                `DOM output truncated to ${result.format === 'json' ? 'tree' : result.returnedChars} of ${result.totalChars} characters; use --max-chars to change the limit.`,
             );
+          if (result?.diff) {
+            if (result.diff.baseline) console.error('DOM diff baseline established.');
+            else {
+              for (const line of result.diff.removed) console.log(`- ${line}`);
+              for (const line of result.diff.added) console.log(`+ ${line}`);
+              if (!result.diff.changed) console.error('DOM unchanged.');
+            }
+          }
         } else if (command === 'screenshot') {
           const output = value('--output') ?? 'screenshot.png';
           const bytes = Buffer.from(message.result.data, 'base64');
@@ -688,11 +831,18 @@ function printResult(kind: string, result: any) {
     click: `Clicked${locator ? ` ${locator}` : ''}.`,
     press: `Pressed ${result.key}${locator ? ` on ${locator}` : ''}.`,
     fill: `Filled${locator ? ` ${locator}` : ''} with ${result.valueLength ?? 0} characters.${result.verified === false ? ' WARNING: field value did not match after fill.' : ''}`,
-    select: `Selected ${JSON.stringify(result.value ?? result.optionText)}${locator ? ` in ${locator}` : ''}.`,
+    type: `Typed ${result.characters ?? 0} characters${locator ? ` into ${locator}` : ''}.`,
+    select: `Selected ${JSON.stringify(result.values ?? result.value ?? result.optionText)}${locator ? ` in ${locator}` : ''}.`,
+    scroll: `Scrolled to ${result.scrollX ?? 0},${result.scrollY ?? 0}${result.moved === false ? ' (no movement)' : ''}.`,
+    bounds: `Bounds: ${result.x},${result.y} ${result.width}×${result.height}${result.inViewport ? ' (in viewport)' : ' (outside viewport)'}.`,
+    highlight: `Highlighted element for ${result.duration}ms.`,
+    drag: `Dragged from ${result.from?.x},${result.from?.y} to ${result.to?.x},${result.to?.y}.`,
+    activate: `Activated paired tab ${result.tabId}.`,
     wait: `Matched ${result.condition ?? 'condition'} after ${result.elapsedMs ?? 0}ms.`,
     close: `Closed session ${result.session}.`,
     screenshot: `Saved screenshot to ${result.output} (${result.bytes} bytes).`,
     scrape: `Saved ${result.routes} routes to ${result.output} (${result.bytes} bytes).`,
+    'dom-file': `Saved ${result.format} DOM to ${result.output} (${result.bytes} bytes).`,
     'extension pair': `Paired. Control session: ${result.id}`,
   };
   console.log(messages[kind] ?? JSON.stringify(result, null, 2));

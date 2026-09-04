@@ -31,11 +31,17 @@ If the extension or paired tab is unavailable, ordinary commands automatically o
 
 ```sh
 browserctl navigate URL [--timeout MS] --json
-browserctl dom [LOCATOR] [--format interactive|summary|clean_html|json] [--offset N] [--limit N] [--item-limit N] [--nth N] [--max-chars N] [--text-chars N] [--depth N] --json
-browserctl click LOCATOR [--wait-navigation] [--timeout MS] --json
+browserctl dom [LOCATOR] [--format interactive|summary|clean_html|json] [--diff] [--output FILE] [--screenshot FILE] --json
+browserctl click (LOCATOR | --at X,Y) [--button BUTTON] [--double] [--modifier MOD] [--screenshot FILE] --json
 browserctl fill LOCATOR --value VALUE --json
-browserctl select LOCATOR (--value VALUE | --option-text TEXT) --json
-browserctl press LOCATOR --key 'ctrl+Enter' --json
+browserctl type LOCATOR --value TEXT [--clear] [--submit] [--delay MS] --json
+browserctl select LOCATOR (--value VALUE... | --values A,B | --option-text TEXT) --json
+browserctl press [LOCATOR] --key 'ctrl+Enter' --json
+browserctl scroll [LOCATOR] (--direction down --amount 600 | --delta-y 600 | --into-view) --json
+browserctl bounds LOCATOR --json
+browserctl highlight LOCATOR [--duration-ms 2000] --json
+browserctl drag --from-selector CSS (--to-selector CSS | --to-x N --to-y N) --json
+browserctl activate --json
 browserctl wait LOCATOR [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] --json
 browserctl wait --url URL [--timeout MS] --json
 browserctl wait --url-glob GLOB [--timeout MS] --json
@@ -48,13 +54,13 @@ browserctl scrape [URL] --output FILE.zip [--max-routes N] [--max-bytes N] [--ma
 browserctl close --json
 ```
 
-`fill` replaces the complete value and dispatches `input` and `change`. `--value` supplies the replacement; `--text` always remains a locator. The result includes `verified: true|false` — the field value read back after the fill. Treat `verified: false` as a failed fill and investigate before submitting. The legacy `type` command is a fill-compatible alias; use `fill` in new workflows.
+`fill` replaces the complete value and dispatches `input` and `change`. `--value` supplies the replacement; `--text` always remains a locator. The result includes `verified: true|false` — the field value read back after the fill. Treat `verified: false` as a failed fill and investigate before submitting. `type` instead focuses the element and sends a CDP key stream; use `--clear`, `--delay`, and `--submit` when autocomplete or search depends on keyboard behavior.
 
 Element commands accept exactly one locator: `--selector CSS`, `--role ROLE` with optional `--name NAME`, `--label LABEL`, or `--text TEXT`. Semantic matching is case-insensitive and partial by default; `--exact` uses normalized exact matching. Prefer role/name or label over CSS when the page exposes stable semantics.
 
 Scope a locator to a repeated card, row, or section with `--within-selector`, `--within-role` plus optional `--within-name`, `--within-label`, or `--within-text`. Use `--within-exact` for exact scope matching.
 
-Mutation locators must resolve uniquely. Use zero-based `--nth N` only when a stable scope is unavailable. `select` chooses a native option by exact `--value` or normalized `--option-text`, dispatches `input` and `change`, and verifies the result.
+Mutation locators must resolve uniquely. Use zero-based `--nth N` only when a stable scope is unavailable. `select` chooses a native option by exact `--value` or normalized `--option-text`, dispatches `input` and `change`, and verifies the result. Repeat `--value` or use `--values A,B` for a native multi-select.
 
 ```sh
 browserctl click --role button --name "Add Bookmark" --exact --json
@@ -65,6 +71,13 @@ browserctl click --within-text Hardware-Basteln --role button --name Edit --json
 ```
 
 `press` focuses the located element and sends a native key chord through Chrome DevTools Protocol. Modifiers are `ctrl`, `alt`, `shift`, and `meta`; join them with `+`. Chrome briefly attaches its debugger for each press and detaches immediately afterward.
+Omit the locator to send the chord to the page's current active element.
+
+`scroll` acts on the page by default or a uniquely located container. It reports the final position, actual delta, and `moved`; treat `moved: false` as a stall. `--into-view` requires a locator and centers it. Use `bounds` to get viewport/page coordinates and `inViewport` before falling back to `click --at X,Y`. Prefer semantic clicks whenever possible.
+
+Rich clicks support `--button`, `--double`, repeatable `--modifier`, center-relative `--offset-x`/`--offset-y`, and `--hold-ms`. `drag` uses prefixed source/target locators such as `--from-text Todo --to-text Done`; coordinate targets are a fallback. `highlight` outlines a unique match without waiting for the highlight duration. `activate` focuses only the paired tab and its window.
+
+Use `--screenshot FILE.png` on `click`, `fill`, `type`, `select`, `press`, `scroll`, `drag`, or `dom` to capture the result in the same controller round-trip. Use `--intent TEXT` on mutations to retain the human-readable purpose in structured output.
 
 `wait` accepts exactly one locator, exact URL, URL glob, title substring, page-world expression, `--tab-active`, or `--window-focused`. Prefer it to sleeps after navigation, clicks, and form submissions. URL globs use `*` within one path segment and `**` across segments. Locator waits can require `--count N`, exact field/text `--value VALUE`, or `--changes` from the value observed when waiting starts; these predicates are mutually exclusive. Use `--evaluate` only when those built-ins cannot express the observable application state. Locator waits default to `visible`; `--state` only applies to locator waits. Results include the locator, requested state, matched and visible counts, and observed value where relevant. A hidden wait succeeds only when every matching element is hidden or no elements match. Clicks automatically wait for native form submissions; use `--wait-navigation` for other navigating controls.
 
@@ -77,6 +90,8 @@ DOM output has five formats via `--format` (default `clean_html`):
 - `html` — raw `outerHTML`, unfiltered; accepted as an undocumented escape hatch only.
 
 `--max-chars` (1–1,000,000, default 50,000) bounds the output and truncation is reported, including `totalItems` for `interactive` and `summary`. `--text-chars` (default 100) controls per-node text clipping. `--depth` bounds `clean_html` and `json` tree depth. When a locator matches repeated records, `--offset` and `--limit` select a stable slice and the result reports matched and returned counts. Scope before raising limits. `evaluate` safely serializes objects, arrays, bigints, functions, and circular references; return structured values directly rather than wrapping them in `JSON.stringify`.
+
+Interactive and summary items include `inViewport`. `dom --diff` compares against the previous DOM read in the same session; the first call establishes a baseline, and later calls return up to 200 added and removed lines. Use `dom --output FILE` for large HTML or JSON payloads.
 
 Screenshots capture the active paired tab. The default captures its viewport. `--full-page` and `--selector CSS` scroll and stitch the full document or element, then restore the original scroll position. Pages with fixed or sticky content may show stitching artifacts.
 
@@ -94,7 +109,8 @@ Use `--json` for a stable `{ "ok": true, "result": ... }` result envelope. Mutat
 4. Use `fill` for fields and `click` for the site's actual controls. When the user requests a UI workflow, keep the mutation in the UI instead of substituting a direct HTTP request.
 5. Wait for the observable completion condition.
 6. Verify the result from the page. Stop before repeating a mutation when its outcome is uncertain.
-7. Close the session when finished. Closing leaves the browser tab open.
+7. If scroll, drag, or coordinate actions stall four times, stop and reassess the locator or page state instead of repeating blindly.
+8. Close the session when finished. Closing leaves the browser tab open.
 
 Never assume `start` can choose the current tab. It can bind only the tab selected by the CLI pairing page. It must fail when that tab is unavailable and must never fall back to an active or arbitrary tab. Pair again after the control tab closes or Chromium restarts. An extension reload keeps the explicit association.
 

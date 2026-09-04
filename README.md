@@ -33,7 +33,13 @@ browserctl navigate https://example.com [--timeout 10000]
 browserctl dom [LOCATOR] [--format summary] [--offset N] [--limit N] [--max-chars 50000]
 browserctl click LOCATOR
 browserctl fill LOCATOR --value VALUE
+browserctl type LOCATOR --value TEXT [--clear] [--submit] [--delay MS]
 browserctl select LOCATOR (--value VALUE | --option-text TEXT)
+browserctl scroll [LOCATOR] (--direction down --amount 600 | --delta-y 600 | --into-view)
+browserctl bounds LOCATOR
+browserctl highlight LOCATOR [--duration-ms 2000]
+browserctl drag --from-selector CSS (--to-selector CSS | --to-x N --to-y N)
+browserctl activate
 browserctl wait LOCATOR [--state visible|attached|hidden] [--timeout MS]
 browserctl wait --tab-active [--timeout MS]
 browserctl wait --url URL [--timeout MS]
@@ -50,9 +56,27 @@ If no usable extension is connected, an ordinary browser command automatically o
 
 Commands produce concise human-readable results by default. Add `--json` for a stable `{ "ok": true, "result": ... }` envelope. Run `browserctl COMMAND --help` for command-specific syntax and options.
 
-`fill` replaces the complete value and dispatches `input` and `change` events. Its replacement value uses `--value`; `--text` always identifies an element by visible text. `type` remains a compatibility alias with fill semantics.
+`fill` replaces the complete value and verifies the result. `type` focuses the field and sends a real CDP key stream; use `--clear`, `--delay`, and `--submit` for autocomplete and search interfaces. `press` accepts an optional locator—without one, it targets the page's current active element.
 
 `select` chooses a native `<select>` option by exact value or normalized visible text, dispatches `input` and `change`, and verifies the resulting value.
+Repeat `--value` or pass `--values a,b` for a native multi-select.
+
+### Actions and grounding
+
+`scroll` moves the page or a uniquely located scroll container and reports the resulting position and actual delta, including no-op movement at an edge. `--into-view` centers a located element. `bounds` reports viewport and page coordinates, dimensions, and `inViewport`; use it before the coordinate fallback `click --at X,Y`. Semantic locators remain preferred.
+
+`click` supports left, right, and middle buttons, double-click, repeatable modifiers, center-relative offsets, and holds. `drag` prefers locator-to-locator movement and accepts viewport coordinates only as a fallback. Both use native CDP pointer events after enforcing locator uniqueness.
+
+```sh
+browserctl click --role button --name Open --button right
+browserctl click --selector canvas --offset-x 40 --offset-y -20
+browserctl click --at 640,420
+browserctl drag --from-text Todo --to-text Done
+```
+
+`highlight` temporarily outlines the unique match for human verification. `activate` may focus only the explicitly paired tab and its window; it cannot select another tab.
+
+Add `--screenshot FILE.png` to `click`, `fill`, `type`, `select`, `press`, `scroll`, `drag`, or `dom` to save a viewport screenshot in the same controller round-trip. Add `--intent TEXT` to mutations to preserve a human-readable reason in the structured result.
 
 ### Locators
 
@@ -77,6 +101,8 @@ browserctl click --within-text Hardware-Basteln --role button --name Edit
 `dom --format summary` returns visible landmarks, headings, and controls, groups repeated items, and accepts `--item-limit`. A DOM locator can match repeated records; use `--offset` and `--limit` to retrieve a slice. Add zero-based `--nth` to choose one match; mutation commands reject ambiguous unindexed locators. Screenshot capture defaults to the viewport; full-page and selector captures scroll and stitch the active paired tab and restore its original position afterward. `--wait-for-active` waits for that tab instead of failing immediately.
 
 Summary links include their resolved `href`, and summary accounting distinguishes raw elements, unique groups, and returned groups. `click` automatically waits for native form submissions; use `--wait-navigation` when a non-submit control is also expected to navigate. URL waits accept either exact `--url` or `--url-glob` patterns where `*` stays within one path segment and `**` spans segments.
+
+Interactive and summary records include `inViewport`. `dom --diff` compares the current bounded snapshot with the previous DOM read in the same session and returns up to 200 added and removed lines. The first diff establishes a baseline. Use `dom --output FILE` for large HTML or JSON results.
 
 `scrape` captures the requested page and discovered same-origin routes into one ZIP. Each route gets a rendered MHTML snapshot (including loaded assets) and a full-page stitched PNG. Sticky and fixed elements are retained only in the first tile. Discovery strips query strings and fragments, never leaves the starting origin, and is bounded to 20 routes, 50 MB, and 120 seconds by default (hard limits: 50 routes, 100 MB, and 10 minutes). Every CDP, screenshot, and link-discovery operation has a deadline; failed secondary routes are skipped. The archive can contain content visible to your signed-in browser; review it before sharing.
 
