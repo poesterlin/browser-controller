@@ -18,7 +18,7 @@ const command = args[0];
 const effectiveCommand = command === 'doctor' ? 'status' : command;
 const jsonOutput = args.includes('--json');
 const CLI_VERSION = '0.1.0';
-const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window']);
+const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window', '--no-auto-pair']);
 const DOM_FORMATS = new Set(['interactive', 'summary', 'clean_html', 'json', 'html']);
 const KNOWN_FLAGS = new Set([
   '--session', '-s', '--json', '--help', '-h', '--selector', '--role', '--name', '--label',
@@ -27,7 +27,7 @@ const KNOWN_FLAGS = new Set([
   '--offset', '--limit', '--within-selector', '--within-role', '--within-name', '--within-label', '--within-text', '--within-exact',
   '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
   '--url-glob', '--wait-navigation',
-  '--max-bytes', '--max-routes', '--max-duration',
+  '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window', '--no-auto-pair',
 ]);
 const invocation =
   process.env.BROWSER_CONTROLLER_COMMAND ??
@@ -192,7 +192,7 @@ const numberValue = (...names: string[]) => {
 };
 
 function validateFlags() {
-  const common = ['--session', '-s', '--json', '--help', '-h'];
+  const common = ['--session', '-s', '--json', '--help', '-h', '--no-auto-pair'];
   const locator = ['--selector', '--role', '--name', '--label', '--text', '--exact'];
   const within = ['--within-selector', '--within-role', '--within-name', '--within-label', '--within-text', '--within-exact'];
   const byCommand: Record<string, string[]> = {
@@ -412,7 +412,7 @@ Commands:
   start            Explicitly create or reconnect a session
   close            Close a session
 
-Ordinary browser commands use the current session automatically. Pass --session ID only to select another session. Use --json for stable machine-readable output.
+Ordinary browser commands use the current session automatically. If no usable extension is connected, the CLI opens a one-time pairing page and continues the original command; pass --no-auto-pair to fail instead. Pass --session ID only to select another session. Use --json for stable machine-readable output.
 
 Run '${invocation} COMMAND --help' for command-specific help.`;
 }
@@ -437,6 +437,13 @@ async function main() {
   validateFlags();
   const pairing = command === 'extension' && args[1] === 'pair';
   const request = browserCommand(pairing);
+  const recoverableCommand =
+    !pairing &&
+    !args.includes('--no-auto-pair') &&
+    !value('--session', '-s') &&
+    (request.type === 'start'
+      ? !request.adapter
+      : ['navigate', 'dom', 'screenshot', 'scrape', 'click', 'fill', 'select', 'press', 'wait', 'evaluate'].includes(request.type));
   const autoStart =
     pairing ||
     effectiveCommand === 'start' ||
@@ -467,8 +474,11 @@ async function main() {
   await new Promise<void>((resolve, reject) => {
     let pair: any;
     let starting = false;
+    let recovering = pairing;
+    let recoveryAttempted = false;
+    let activeId = id;
     const artifactChunks: Buffer[] = [];
-    const timeoutMs = pairing
+    const commandTimeoutMs = pairing
       ? 305_000
       : request.type === 'wait'
         ? (request.timeout ?? 10_000) + 5_000
@@ -479,6 +489,7 @@ async function main() {
           : request.type === 'scrape'
             ? (request.maxDuration ?? 120_000) + 90_000
         : 15_000;
+    const timeoutMs = commandTimeoutMs + (recoverableCommand ? 305_000 : 0);
     const timer = setTimeout(() => reject(new Error('command timed out waiting for supervisor')), timeoutMs);
     const finish = (error?: Error) => {
       clearTimeout(timer);
@@ -488,29 +499,38 @@ async function main() {
     };
     ws.on('message', (raw) => {
       const message = JSON.parse(raw.toString());
-      if (!pairing && message.id === id && message.event === 'artifact_chunk') {
+      if (!recovering && message.id === activeId && message.event === 'artifact_chunk') {
         if (message.index !== artifactChunks.length || typeof message.data !== 'string')
           return finish(new Error('invalid artifact chunk sequence'));
         artifactChunks.push(Buffer.from(message.data, 'base64'));
         return;
       }
-      if (pairing && message.event === 'adapter_connected' && pair && !starting) {
+      if (
+        recovering &&
+        message.event === 'adapter_connected' &&
+        pair &&
+        !starting &&
+        message.adapterId === pair.adapterId
+      ) {
         starting = true;
+        activeId = randomUUID();
         ws.send(
           JSON.stringify({
             version: PROTOCOL_VERSION,
-            id: randomUUID(),
+            id: activeId,
             kind: 'command',
-            command: { type: 'start', adapter: message.adapterId },
+            command: {
+              type: 'start',
+              adapter: message.adapterId,
+              ...(request.type === 'start' && request.name ? { name: request.name } : {}),
+            },
           }),
         );
         return;
       }
-      if (!pairing && message.id !== id) return;
-      if (pairing && !pair && message.id !== id) return;
-      if (pairing && pair && !starting) return;
+      if (message.id !== activeId) return;
       if (message.ok) {
-        if (pairing && !pair) {
+        if (recovering && !pair) {
           pair = message.result;
           const pairingPage = new URL(pair.endpoint);
           pairingPage.protocol = pairingPage.protocol === 'wss:' ? 'https:' : 'http:';
@@ -521,12 +541,33 @@ async function main() {
           console.error(
             `Manual extension-popup fallback: browser-controller://pair?${new URLSearchParams({ endpoint: pair.endpoint, code: pair.code, adapter: pair.adapterId })}`,
           );
-          spawn('xdg-open', [pairingPage.toString()], { detached: true, stdio: 'ignore' }).unref();
+          if (process.env.BROWSER_CONTROLLER_DISABLE_OPEN !== '1')
+            spawn('xdg-open', [pairingPage.toString()], { detached: true, stdio: 'ignore' }).unref();
           return;
         }
-        if (pairing) {
+        if (recovering && starting) {
           const session = message.result;
-          printResult('extension pair', { action: 'paired', ...session });
+          if (pairing) {
+            printResult('extension pair', { action: 'paired', ...session });
+            return finish();
+          }
+          if (request.type === 'start') {
+            printResult('start', session);
+            return finish();
+          }
+          recovering = false;
+          pair = undefined;
+          starting = false;
+          activeId = randomUUID();
+          artifactChunks.length = 0;
+          console.error('Extension paired; continuing original command…');
+          ws.send(JSON.stringify({
+            version: PROTOCOL_VERSION,
+            id: activeId,
+            kind: 'command',
+            command: request,
+          }));
+          return;
         } else if (command === 'dom') {
           const result = message.result;
           if (jsonOutput) printResult('dom', result);
@@ -573,6 +614,23 @@ async function main() {
           });
         } else printResult(effectiveCommand, message.result ?? {});
         finish();
+      } else if (
+        message.error &&
+        recoverableCommand &&
+        !recovering &&
+        !recoveryAttempted &&
+        ['adapter_unavailable', 'adapter_disconnected', 'control_tab_unavailable', 'extension_timeout'].includes(message.error.code)
+      ) {
+        recoveryAttempted = true;
+        recovering = true;
+        activeId = randomUUID();
+        console.error('Browser extension unavailable; opening a new pairing session…');
+        ws.send(JSON.stringify({
+          version: PROTOCOL_VERSION,
+          id: activeId,
+          kind: 'command',
+          command: { type: 'extension_pair' },
+        }));
       } else if (message.error) {
         finish(new CliError(message.error.code, message.error.message, message.error.details));
       }

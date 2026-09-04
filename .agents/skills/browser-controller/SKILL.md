@@ -25,6 +25,8 @@ browserctl status --json
 
 Ordinary browser commands safely create or reconnect the current session. Use `--session ID` only to select a specific session.
 
+If the extension or paired tab is unavailable, ordinary commands automatically open a one-time pairing page, wait for that explicitly created tab to bind, start a session, and retry once. Pass `--no-auto-pair` to fail without opening a page. An explicit `--session ID` never switches to a new session automatically.
+
 ## Operate
 
 ```sh

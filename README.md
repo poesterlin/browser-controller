@@ -46,6 +46,8 @@ browserctl close
 
 Ordinary browser commands automatically use the current session. If none exists, the supervisor safely creates one after the extension confirms the exact paired control tab. Use `--session ID` only to select a specific session.
 
+If no usable extension is connected, an ordinary browser command automatically opens a one-time pairing page, waits for that explicitly created tab to bind, starts a session, and then retries the original command once. This recovery never selects an existing arbitrary tab. Use `--no-auto-pair` when unattended scripts should fail instead of opening a browser page.
+
 Commands produce concise human-readable results by default. Add `--json` for a stable `{ "ok": true, "result": ... }` envelope. Run `browserctl COMMAND --help` for command-specific syntax and options.
 
 `fill` replaces the complete value and dispatches `input` and `change` events. Its replacement value uses `--value`; `--text` always identifies an element by visible text. `type` remains a compatibility alias with fill semantics.

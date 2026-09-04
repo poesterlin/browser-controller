@@ -163,6 +163,88 @@ describe('CLI transport', () => {
     expect(stdout).toContain('--text TEXT');
   });
 
+  test('pairs, starts a session, and retries when the extension is unavailable', async () => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'browserctl-cli-test-'));
+    const runtime = path.join(temp, 'browser-controller');
+    await fs.mkdir(runtime, { recursive: true });
+    const token = 'a'.repeat(64);
+    const http = await listeningServer();
+    const server = new WebSocketServer({ server: http });
+    cleanups.push(
+      () => new Promise<void>((resolve) => server.close(() => http.close(() => resolve()))),
+      () => fs.rm(temp, { recursive: true, force: true }),
+    );
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server address');
+    await fs.writeFile(
+      path.join(runtime, 'connection.json'),
+      JSON.stringify({ url: `ws://127.0.0.1:${address.port}`, pid: process.pid, token, version: 1 }),
+    );
+    const commandTypes: string[] = [];
+    server.on('connection', (socket) => {
+      socket.on('message', (raw) => {
+        const message = JSON.parse(raw.toString());
+        if (message.kind === 'hello')
+          return socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: {} }));
+        if (message.kind !== 'command') return;
+        commandTypes.push(message.command.type);
+        if (commandTypes.length === 1)
+          return socket.send(JSON.stringify({
+            version: 1,
+            id: message.id,
+            ok: false,
+            error: { code: 'adapter_unavailable', message: 'no extension connected' },
+          }));
+        if (message.command.type === 'extension_pair') {
+          socket.send(JSON.stringify({
+            version: 1,
+            id: message.id,
+            ok: true,
+            result: {
+              endpoint: `ws://127.0.0.1:${address.port}`,
+              code: 'pair-code',
+              adapterId: 'adapter-1',
+            },
+          }));
+          return socket.send(JSON.stringify({ event: 'adapter_connected', adapterId: 'adapter-1' }));
+        }
+        if (message.command.type === 'start')
+          return socket.send(JSON.stringify({
+            version: 1,
+            id: message.id,
+            ok: true,
+            result: { id: 'session-1', adapter: 'adapter-1' },
+          }));
+        socket.send(JSON.stringify({
+          version: 1,
+          id: message.id,
+          ok: true,
+          result: { action: 'clicked' },
+        }));
+      });
+    });
+
+    const child = spawn(
+      process.execPath,
+      [path.join(import.meta.dir, 'index.ts'), 'click', '--role', 'button', '--name', 'Continue', '--json'],
+      {
+        env: {
+          ...process.env,
+          XDG_RUNTIME_DIR: temp,
+          BROWSER_CONTROLLER_DISABLE_OPEN: '1',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let stdout = '';
+    child.stdout.on('data', (chunk) => (stdout += chunk));
+    const exitCode = await new Promise<number | null>((resolve) => child.once('close', resolve));
+
+    expect(exitCode).toBe(0);
+    expect(commandTypes).toEqual(['click', 'extension_pair', 'start', 'click']);
+    expect(JSON.parse(stdout)).toEqual({ ok: true, result: { action: 'clicked' } });
+  });
+
   test('writes a scrape archive returned by the extension', async () => {
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'browserctl-cli-test-'));
     const runtime = path.join(temp, 'browser-controller');
