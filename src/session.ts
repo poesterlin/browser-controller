@@ -32,6 +32,11 @@ export interface DomOptions {
   within?: Locator;
   nth?: number;
   itemLimit?: number;
+  diff?: boolean;
+}
+export interface ActionOptions {
+  screenshotAfter?: boolean;
+  intent?: string;
 }
 export interface WaitOptions {
   locator?: Locator;
@@ -57,10 +62,16 @@ export interface BrowserSession {
   screenshot(options: ScreenshotOptions): Promise<ScreenshotResult>;
   scrape(options: ScrapeOptions): Promise<ScrapeResult>;
   dom(options: DomOptions): Promise<DomResult>;
-  click(locator: Locator, within?: Locator, nth?: number, options?: { waitNavigation?: boolean; timeout?: number }): Promise<unknown>;
-  press(locator: Locator, key: string, within?: Locator, nth?: number): Promise<unknown>;
+  click(locator: Locator | undefined, within: Locator | undefined, nth: number | undefined, options: ActionOptions & { waitNavigation?: boolean; timeout?: number; button?: 'left' | 'right' | 'middle'; double?: boolean; modifiers?: Array<'ctrl' | 'alt' | 'shift' | 'meta'>; offsetX?: number; offsetY?: number; holdMs?: number; x?: number; y?: number }): Promise<unknown>;
+  press(locator: Locator | undefined, key: string, within?: Locator, nth?: number): Promise<unknown>;
   fill(locator: Locator, text: string, within?: Locator, nth?: number): Promise<unknown>;
-  select(locator: Locator, options: { value?: string; optionText?: string; within?: Locator; nth?: number }): Promise<unknown>;
+  type(locator: Locator, text: string, options: { within?: Locator; nth?: number; delay?: number; clear?: boolean; submit?: boolean }): Promise<unknown>;
+  select(locator: Locator, options: { value?: string; optionText?: string; values?: string[]; within?: Locator; nth?: number }): Promise<unknown>;
+  scroll(options: { locator?: Locator; within?: Locator; nth?: number; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; deltaX?: number; deltaY?: number; intoView?: boolean }): Promise<unknown>;
+  bounds(locator: Locator, within?: Locator, nth?: number): Promise<unknown>;
+  highlight(locator: Locator, within?: Locator, nth?: number, duration?: number): Promise<unknown>;
+  drag(from: Locator, options: { to?: Locator; fromNth?: number; toNth?: number; toX?: number; toY?: number }): Promise<unknown>;
+  activate(): Promise<unknown>;
   wait(options: WaitOptions): Promise<unknown>;
   evaluate(expression: string): Promise<EvaluateResult>;
   close(reason: string): Promise<void>;

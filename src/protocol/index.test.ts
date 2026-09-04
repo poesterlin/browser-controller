@@ -274,4 +274,29 @@ describe('protocol validation', () => {
       }),
     ).toMatchObject({ code: 'invalid_request' });
   });
+  test('validates locator-first action commands and coordinate fallbacks', () => {
+    for (const command of [
+      { type: 'scroll', session: 's', direction: 'down', amount: 400 },
+      { type: 'scroll', session: 's', locator: { by: 'text', value: 'More' }, intoView: true },
+      { type: 'bounds', session: 's', locator: { by: 'role', value: 'button', name: 'Save' } },
+      { type: 'highlight', session: 's', locator: { by: 'label', value: 'Email' }, duration: 2000 },
+      { type: 'click', session: 's', x: 100, y: 200, button: 'right' },
+      { type: 'drag', session: 's', from: { by: 'text', value: 'Todo' }, to: { by: 'text', value: 'Done' } },
+      { type: 'press', session: 's', key: 'Escape' },
+      { type: 'activate', session: 's' },
+    ])
+      expect(validateEnvelope({ version: 1, id: command.type, kind: 'command', command }).ok).toBe(true);
+    expect(validateEnvelope({
+      version: 1,
+      id: 'bad-click',
+      kind: 'command',
+      command: { type: 'click', session: 's', x: 10 },
+    })).toMatchObject({ code: 'invalid_request' });
+    expect(validateEnvelope({
+      version: 1,
+      id: 'bad-scroll',
+      kind: 'command',
+      command: { type: 'scroll', session: 's', intoView: true },
+    })).toMatchObject({ code: 'invalid_request' });
+  });
 });

@@ -317,13 +317,92 @@ async function page(tabId, message) {
 
       const element = locate();
       const scopeMatches = m.within ? findAll(m.within).length : undefined;
-      if (['click', 'focus', 'fill', 'type', 'select'].includes(m.type) && m.within && scopeMatches === 0)
+      const locatorAction = ['click', 'focus', 'fill', 'type', 'select', 'scroll', 'bounds', 'highlight', 'point'];
+      if (locatorAction.includes(m.type) && m.within && scopeMatches === 0)
         return 'scope_not_found';
-      if (['click', 'focus', 'fill', 'type', 'select'].includes(m.type) && m.within && scopeMatches > 1)
+      if (locatorAction.includes(m.type) && m.within && scopeMatches > 1)
         return `ambiguous_scope:${scopeMatches}`;
-      if (['click', 'focus', 'fill', 'type', 'select'].includes(m.type) && m.nth === undefined && rawLocateAll().length > 1)
+      if (locatorAction.includes(m.type) && locator && m.nth === undefined && rawLocateAll().length > 1)
         return `ambiguous_locator:${rawLocateAll().length}`;
       if (locator && !element) return 'element_not_found';
+      const elementBounds = (target) => {
+        const rect = target.getBoundingClientRect();
+        return {
+          x: rect.left,
+          y: rect.top,
+          pageX: rect.left + scrollX,
+          pageY: rect.top + scrollY,
+          width: rect.width,
+          height: rect.height,
+          inViewport:
+            rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
+        };
+      };
+      if (m.type === 'point') {
+        if (m.scroll !== false) {
+          element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        }
+        const bounds = elementBounds(element);
+        return {
+          ...bounds,
+          centerX: bounds.x + bounds.width / 2 + (m.offsetX ?? 0),
+          centerY: bounds.y + bounds.height / 2 + (m.offsetY ?? 0),
+          submissionExpected:
+            (element instanceof HTMLButtonElement && (element.type === 'submit' || !!element.form)) ||
+            (element instanceof HTMLInputElement && ['submit', 'image'].includes(element.type)),
+        };
+      }
+      if (m.type === 'bounds') return { action: 'bounded', ...elementBounds(element) };
+      if (m.type === 'scroll') {
+        if (m.intoView) {
+          const before = elementBounds(element);
+          element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const after = elementBounds(element);
+          return {
+            action: 'scrolled',
+            scrollX,
+            scrollY,
+            intoView: true,
+            moved: before.x !== after.x || before.y !== after.y,
+            bounds: after,
+          };
+        }
+        const target = element ?? window;
+        const beforeX = target === window ? scrollX : target.scrollLeft;
+        const beforeY = target === window ? scrollY : target.scrollTop;
+        const amount = m.amount ?? 600;
+        const directions = {
+          up: [0, -amount],
+          down: [0, amount],
+          left: [-amount, 0],
+          right: [amount, 0],
+        };
+        const [deltaX, deltaY] = m.direction ? directions[m.direction] : [m.deltaX ?? 0, m.deltaY ?? 0];
+        target.scrollBy({ left: deltaX, top: deltaY, behavior: 'instant' });
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const afterX = target === window ? scrollX : target.scrollLeft;
+        const afterY = target === window ? scrollY : target.scrollTop;
+        return { action: 'scrolled', scrollX: afterX, scrollY: afterY, deltaX: afterX - beforeX, deltaY: afterY - beforeY, moved: beforeX !== afterX || beforeY !== afterY };
+      }
+      if (m.type === 'highlight') {
+        const previous = { outline: element.style.outline, outlineOffset: element.style.outlineOffset };
+        element.style.setProperty('outline', '3px solid #ff2d55', 'important');
+        element.style.setProperty('outline-offset', '3px', 'important');
+        setTimeout(() => {
+          element.style.outline = previous.outline;
+          element.style.outlineOffset = previous.outlineOffset;
+        }, m.duration ?? 2000);
+        return { action: 'highlighted', duration: m.duration ?? 2000, ...elementBounds(element) };
+      }
+      if (m.type === 'active_value') {
+        const target = document.activeElement;
+        const value = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+          ? target.value
+          : target?.textContent ?? '';
+        return { value, valueLength: value.length };
+      }
       if (m.type === 'dom') {
         const allRoots = locator ? rawLocateAll() : [document.documentElement];
         const offset = m.offset ?? 0;
@@ -444,6 +523,7 @@ async function page(tabId, message) {
               role: role ?? 'generic',
               name: clip(accessibleName(el)).slice(0, 100),
               tag,
+              inViewport: elementBounds(el).inViewport,
             };
             if (el.id) item.css = `#${CSS.escape(el.id)}`;
             if (el instanceof HTMLAnchorElement && el.href) item.href = el.href;
@@ -574,6 +654,15 @@ async function page(tabId, message) {
       }
       if (m.type === 'select') {
         if (!(element instanceof HTMLSelectElement)) return 'element_not_selectable';
+        if (m.values) {
+          if (!element.multiple) return 'element_not_multi_select';
+          const wanted = new Set(m.values);
+          for (const option of element.options) option.selected = wanted.has(option.value);
+          const selected = [...element.selectedOptions].map((option) => option.value);
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+          return { values: selected, verified: selected.length === wanted.size && selected.every((value) => wanted.has(value)) };
+        }
         const option = m.value !== undefined
           ? [...element.options].find((candidate) => candidate.value === m.value)
           : [...element.options].find((candidate) => normalize(candidate.textContent) === normalize(m.optionText));
@@ -641,6 +730,76 @@ async function nativePress(tabId, chord) {
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
   }
+}
+
+function modifierBits(modifiers = []) {
+  return modifiers.reduce(
+    (bits, modifier) => bits | ({ alt: 1, ctrl: 2, meta: 4, shift: 8 }[modifier] ?? 0),
+    0,
+  );
+}
+
+async function withDebugger(tabId, operation) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+  try {
+    return await operation((method, params) => chrome.debugger.sendCommand(target, method, params));
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+async function nativeClick(tabId, point, options) {
+  const button = options.button ?? 'left';
+  const modifiers = modifierBits(options.modifiers);
+  const clicks = options.double ? 2 : 1;
+  await withDebugger(tabId, async (send) => {
+    for (let clickCount = 1; clickCount <= clicks; clickCount += 1) {
+      const common = { x: point.x, y: point.y, button, modifiers, clickCount };
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...common });
+      if (options.holdMs) await new Promise((resolve) => setTimeout(resolve, options.holdMs));
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...common });
+    }
+  });
+}
+
+async function nativeDrag(tabId, source, target) {
+  await withDebugger(tabId, async (send) => {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: source.x, y: source.y });
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: source.x, y: source.y, button: 'left', clickCount: 1 });
+    const steps = 12;
+    for (let step = 1; step <= steps; step += 1) {
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: source.x + ((target.x - source.x) * step) / steps,
+        y: source.y + ((target.y - source.y) * step) / steps,
+        button: 'left',
+        buttons: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1 });
+  });
+}
+
+async function nativeType(tabId, text, options) {
+  await withDebugger(tabId, async (send) => {
+    if (options.clear) {
+      await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
+      await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    }
+    for (const character of text) {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: character, text: character });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: character });
+      if (options.delay) await new Promise((resolve) => setTimeout(resolve, options.delay));
+    }
+    if (options.submit) {
+      await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    }
+  });
 }
 
 async function stitchedScreenshot(tabId, windowId, selector, returnBytes = false, deadline = Infinity) {
@@ -754,12 +913,23 @@ async function clickAndWait(tabId, message) {
   };
   chrome.tabs.onUpdated.addListener(listener);
   try {
-    const injection = (await page(tabId, message))[0];
-    if (injection?.error)
-      throw new Error(`page_world_error: ${injection.error.message ?? String(injection.error)}`);
-    const result = injection?.result;
-    if (typeof result === 'string') return result;
-    const shouldWait = message.waitNavigation || result?.submissionExpected;
+    let point = { centerX: message.x, centerY: message.y, submissionExpected: false };
+    if (message.locator || message.selector) {
+      const injection = (await page(tabId, { ...message, type: 'point' }))[0];
+      if (injection?.error)
+        throw new Error(`page_world_error: ${injection.error.message ?? String(injection.error)}`);
+      if (typeof injection?.result === 'string') return injection.result;
+      point = injection?.result;
+    }
+    await nativeClick(tabId, { x: point.centerX, y: point.centerY }, message);
+    const result = {
+      button: message.button ?? 'left',
+      clickCount: message.double ? 2 : 1,
+      x: point.centerX,
+      y: point.centerY,
+      submissionExpected: point.submissionExpected,
+    };
+    const shouldWait = message.waitNavigation || ((message.button ?? 'left') === 'left' && result?.submissionExpected);
     if (!shouldWait) return result;
     const navigated = completed || await Promise.race([
       navigation,
@@ -952,18 +1122,56 @@ async function execute(message) {
     } else if (message.type === 'click') {
       result = await clickAndWait(state.tabId, message);
     } else if (message.type === 'press') {
+      if (message.locator || message.selector) {
+        const injection = (await page(state.tabId, { ...message, type: 'focus' }))[0];
+        if (injection?.error)
+          throw new Error(`page_world_error: ${injection.error.message ?? String(injection.error)}`);
+        if (injection?.result === 'element_not_found') throw new Error('element_not_found');
+      }
+      await nativePress(state.tabId, message.key);
+      result = 'ok';
+    } else if (message.type === 'type') {
       const injection = (await page(state.tabId, { ...message, type: 'focus' }))[0];
       if (injection?.error)
         throw new Error(`page_world_error: ${injection.error.message ?? String(injection.error)}`);
-      if (injection?.result === 'element_not_found') throw new Error('element_not_found');
-      await nativePress(state.tabId, message.key);
-      result = 'ok';
+      if (typeof injection?.result === 'string' && injection.result !== 'ok') throw new Error(injection.result);
+      await nativeType(state.tabId, message.text, message);
+      result = (await page(state.tabId, { type: 'active_value' }))[0]?.result;
+    } else if (message.type === 'drag') {
+      const sourceResponse = (await page(state.tabId, {
+        type: 'point', locator: message.from, nth: message.fromNth,
+      }))[0];
+      if (sourceResponse?.error) throw new Error(`page_world_error: ${sourceResponse.error.message}`);
+      if (typeof sourceResponse?.result === 'string') throw new Error(sourceResponse.result);
+      const source = sourceResponse.result;
+      let target = { centerX: message.toX, centerY: message.toY, inViewport: true };
+      if (message.to) {
+        const targetResponse = (await page(state.tabId, {
+          type: 'point', locator: message.to, nth: message.toNth, scroll: false,
+        }))[0];
+        if (targetResponse?.error) throw new Error(`page_world_error: ${targetResponse.error.message}`);
+        if (typeof targetResponse?.result === 'string') throw new Error(targetResponse.result);
+        target = targetResponse.result;
+        if (!target.inViewport) throw new Error('drag_target_not_in_viewport');
+      }
+      await nativeDrag(
+        state.tabId,
+        { x: source.centerX, y: source.centerY },
+        { x: target.centerX, y: target.centerY },
+      );
+      result = { from: { x: source.centerX, y: source.centerY }, to: { x: target.centerX, y: target.centerY } };
+    } else if (message.type === 'activate') {
+      const tab = await chrome.tabs.update(state.tabId, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+      result = { action: 'activated', tabId: state.tabId, windowId: tab.windowId };
     } else if (
       message.type === 'evaluate' ||
       message.type === 'dom' ||
       message.type === 'fill' ||
-      message.type === 'type' ||
       message.type === 'select' ||
+      message.type === 'scroll' ||
+      message.type === 'bounds' ||
+      message.type === 'highlight' ||
       message.type === 'wait'
     ) {
       const injection = (await page(state.tabId, message))[0];
@@ -1073,6 +1281,7 @@ async function handle(message, socket) {
           result: {
             extensionVersion: chrome.runtime.getManifest().version,
             scrapeMode: 'full-page-settled',
+            actionSurface: 'locator-actions-v1',
             paired: Number.isInteger(state.controlTabId),
             tabAvailable: !!controlTab,
             tabId: controlTab?.id ?? null,

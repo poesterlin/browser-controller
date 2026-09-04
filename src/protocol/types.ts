@@ -9,6 +9,11 @@ export type Capability =
   | 'evaluate'
   | 'press'
   | 'select'
+  | 'scroll'
+  | 'bounds'
+  | 'highlight'
+  | 'drag'
+  | 'activate'
   | 'scrape.snapshot'
   | 'screenshot.viewport'
   | 'screenshot.fullPage'
@@ -49,6 +54,8 @@ export type Command =
       within?: Locator;
       nth?: number;
       itemLimit?: number;
+      diff?: boolean;
+      screenshotAfter?: boolean;
     }
   | {
       type: 'click';
@@ -59,6 +66,16 @@ export type Command =
       nth?: number;
       waitNavigation?: boolean;
       timeout?: number;
+      button?: 'left' | 'right' | 'middle';
+      double?: boolean;
+      modifiers?: Array<'ctrl' | 'alt' | 'shift' | 'meta'>;
+      offsetX?: number;
+      offsetY?: number;
+      holdMs?: number;
+      x?: number;
+      y?: number;
+      screenshotAfter?: boolean;
+      intent?: string;
     }
   | {
       type: 'press';
@@ -68,6 +85,8 @@ export type Command =
       within?: Locator;
       nth?: number;
       key: string;
+      screenshotAfter?: boolean;
+      intent?: string;
     }
   | {
       type: 'fill';
@@ -77,8 +96,9 @@ export type Command =
       within?: Locator;
       nth?: number;
       text: string;
+      screenshotAfter?: boolean;
+      intent?: string;
     }
-  /** @deprecated Use fill. Type now has fill semantics for compatibility. */
   | {
       type: 'type';
       session: string;
@@ -88,6 +108,10 @@ export type Command =
       nth?: number;
       text: string;
       delay?: number;
+      clear?: boolean;
+      submit?: boolean;
+      screenshotAfter?: boolean;
+      intent?: string;
     }
   | {
       type: 'wait';
@@ -118,7 +142,39 @@ export type Command =
       nth?: number;
       value?: string;
       optionText?: string;
+      values?: string[];
+      screenshotAfter?: boolean;
+      intent?: string;
     }
+  | {
+      type: 'scroll';
+      session: string;
+      locator?: Locator;
+      within?: Locator;
+      nth?: number;
+      direction?: 'up' | 'down' | 'left' | 'right';
+      amount?: number;
+      deltaX?: number;
+      deltaY?: number;
+      intoView?: boolean;
+      screenshotAfter?: boolean;
+      intent?: string;
+    }
+  | { type: 'bounds'; session: string; locator: Locator; within?: Locator; nth?: number }
+  | { type: 'highlight'; session: string; locator: Locator; within?: Locator; nth?: number; duration?: number }
+  | {
+      type: 'drag';
+      session: string;
+      from: Locator;
+      to?: Locator;
+      fromNth?: number;
+      toNth?: number;
+      toX?: number;
+      toY?: number;
+      screenshotAfter?: boolean;
+      intent?: string;
+    }
+  | { type: 'activate'; session: string }
   | { type: 'evaluate'; session: string; expression: string }
   | { type: 'close'; session: string; reason?: string };
 export interface Envelope {
@@ -172,6 +228,7 @@ export interface DomInteractiveItem {
   states?: string[];
   count?: number;
   href?: string;
+  inViewport?: boolean;
 }
 export interface DomResult {
   format: DomFormat;
@@ -189,6 +246,7 @@ export interface DomResult {
   rawItems?: number;
   uniqueItems?: number;
   scopeMatches?: number;
+  diff?: { added: string[]; removed: string[]; changed: boolean; baseline: boolean };
 }
 export interface EvaluateResult {
   value: unknown;

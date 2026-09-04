@@ -34,6 +34,11 @@ const COMMAND_TYPES = new Set<CommandType>([
   'click',
   'press',
   'select',
+  'scroll',
+  'bounds',
+  'highlight',
+  'drag',
+  'activate',
   'fill',
   'type',
   'wait',
@@ -45,7 +50,7 @@ const WAIT_STATES = new Set(['attached', 'visible', 'hidden']);
 const INTEGER_RANGES: Array<[(c: RecordInput) => unknown, number, number, string]> = [
   [(c) => c.timeout, 1, 120_000, 'timeout must be between 1 and 120000'],
   [(c) => c.waitForActive, 1, 120_000, 'waitForActive must be between 1 and 120000'],
-  [(c) => c.delay, 0, 10_000, 'delay must be between 0 and 10000'],
+  [(c) => c.delay, 0, 1_000, 'delay must be between 0 and 1000'],
   [(c) => c.maxChars, 1, 1_000_000, 'maxChars must be between 1 and 1000000'],
   [(c) => c.textChars, 1, 10_000, 'textChars must be between 1 and 10000'],
   [(c) => c.depth, 1, 100, 'depth must be between 1 and 100'],
@@ -57,6 +62,11 @@ const INTEGER_RANGES: Array<[(c: RecordInput) => unknown, number, number, string
   [(c) => c.maxBytes, 1_000_000, 100_000_000, 'maxBytes must be between 1000000 and 100000000'],
   [(c) => c.maxRoutes, 1, 50, 'maxRoutes must be between 1 and 50'],
   [(c) => c.maxDuration, 10_000, 600_000, 'maxDuration must be between 10000 and 600000'],
+  [(c) => c.amount, 1, 100_000, 'amount must be between 1 and 100000'],
+  [(c) => c.holdMs, 0, 10_000, 'holdMs must be between 0 and 10000'],
+  [(c) => c.duration, 100, 30_000, 'duration must be between 100 and 30000'],
+  [(c) => c.fromNth, 0, Number.MAX_SAFE_INTEGER, 'fromNth must be a non-negative integer'],
+  [(c) => c.toNth, 0, Number.MAX_SAFE_INTEGER, 'toNth must be a non-negative integer'],
 ];
 
 function rangeFailure(c: RecordInput, rule: (typeof INTEGER_RANGES)[number]): FailureResult | undefined {
@@ -90,12 +100,18 @@ function validateCommon(c: RecordInput, type: CommandType): FailureResult | unde
     return { ok: false, code: 'invalid_request', message: 'expression is required' };
   if (type === 'click' && c.waitNavigation !== undefined && typeof c.waitNavigation !== 'boolean')
     return { ok: false, code: 'invalid_request', message: 'waitNavigation must be a boolean' };
+  for (const name of ['double', 'clear', 'submit', 'intoView', 'diff', 'screenshotAfter'])
+    if (c[name] !== undefined && typeof c[name] !== 'boolean')
+      return { ok: false, code: 'invalid_request', message: `${name} must be a boolean` };
+  if (c.intent !== undefined && !string(c.intent))
+    return { ok: false, code: 'invalid_request', message: 'intent must be a string' };
+  if (string(c.intent) && c.intent.length > 500)
+    return { ok: false, code: 'invalid_request', message: 'intent must be at most 500 characters' };
   return undefined;
 }
 
 function validateLocatorCommands(c: RecordInput, type: CommandType): FailureResult | undefined {
-  const needsLocator =
-    type === 'press' || type === 'click' || type === 'fill' || type === 'type' || type === 'select';
+  const needsLocator = type === 'fill' || type === 'type' || type === 'select' || type === 'bounds' || type === 'highlight';
   if (needsLocator && !locator(c.locator) && !string(c.selector))
     return { ok: false, code: 'invalid_request', message: 'locator is required' };
   if (type === 'press' && !string(c.key))
@@ -106,12 +122,14 @@ function validateLocatorCommands(c: RecordInput, type: CommandType): FailureResu
 }
 
 function validateSelect(c: RecordInput): FailureResult | undefined {
-  const selectors = [c.value, c.optionText].filter((v) => string(v)).length;
+  if (c.values !== undefined && (!Array.isArray(c.values) || !c.values.every(string) || c.values.length === 0))
+    return { ok: false, code: 'invalid_request', message: 'values must be a non-empty string array' };
+  const selectors = [c.value, c.optionText, c.values].filter((v) => v !== undefined).length;
   if (selectors !== 1)
     return {
       ok: false,
       code: 'invalid_request',
-      message: 'select requires exactly one value or optionText',
+      message: 'select requires exactly one value, optionText, or values array',
     };
   return undefined;
 }
@@ -167,6 +185,39 @@ function validateFields(c: RecordInput, type: CommandType): FailureResult | unde
       code: 'invalid_request',
       message: 'format must be interactive, summary, clean_html, json, or html',
     };
+  for (const name of ['deltaX', 'deltaY', 'offsetX', 'offsetY', 'x', 'y', 'toX', 'toY'])
+    if (c[name] !== undefined && (typeof c[name] !== 'number' || !Number.isInteger(c[name]) || Math.abs(c[name] as number) > 100_000))
+      return { ok: false, code: 'invalid_request', message: `${name} must be an integer between -100000 and 100000` };
+  if (c.direction !== undefined && !['up', 'down', 'left', 'right'].includes(String(c.direction)))
+    return { ok: false, code: 'invalid_request', message: 'invalid scroll direction' };
+  if (c.button !== undefined && !['left', 'right', 'middle'].includes(String(c.button)))
+    return { ok: false, code: 'invalid_request', message: 'invalid mouse button' };
+  if (c.modifiers !== undefined && (!Array.isArray(c.modifiers) || !c.modifiers.every((v) => ['ctrl', 'alt', 'shift', 'meta'].includes(String(v)))))
+    return { ok: false, code: 'invalid_request', message: 'invalid modifier' };
+  if (type === 'click') {
+    const coordinates = c.x !== undefined || c.y !== undefined;
+    if (coordinates && (c.x === undefined || c.y === undefined || locator(c.locator) || string(c.selector)))
+      return { ok: false, code: 'invalid_request', message: 'click requires a locator or both x and y' };
+    if (!coordinates && !locator(c.locator) && !string(c.selector))
+      return { ok: false, code: 'invalid_request', message: 'click requires a locator or both x and y' };
+    if (coordinates && (c.within !== undefined || c.nth !== undefined || c.offsetX !== undefined || c.offsetY !== undefined))
+      return { ok: false, code: 'invalid_request', message: 'coordinate clicks do not accept locator options' };
+  }
+  if (type === 'press' && !locator(c.locator) && !string(c.selector) && (c.within !== undefined || c.nth !== undefined))
+    return { ok: false, code: 'invalid_request', message: 'page-level press does not accept locator options' };
+  if (type === 'drag') {
+    if (!locator(c.from)) return { ok: false, code: 'invalid_request', message: 'drag source locator is required' };
+    const coordinates = c.toX !== undefined || c.toY !== undefined;
+    if ((coordinates && (c.toX === undefined || c.toY === undefined || c.to !== undefined)) || (!coordinates && !locator(c.to)))
+      return { ok: false, code: 'invalid_request', message: 'drag requires a target locator or both toX and toY' };
+  }
+  if (type === 'scroll') {
+    const modes = [c.intoView === true, c.direction !== undefined, c.deltaX !== undefined || c.deltaY !== undefined].filter(Boolean).length;
+    if (modes !== 1) return { ok: false, code: 'invalid_request', message: 'scroll requires exactly one mode' };
+    if (c.intoView === true && !locator(c.locator)) return { ok: false, code: 'invalid_request', message: 'intoView requires a locator' };
+    if (!locator(c.locator) && (c.within !== undefined || c.nth !== undefined))
+      return { ok: false, code: 'invalid_request', message: 'page scroll does not accept locator options' };
+  }
   if (type === 'select') {
     const result = validateSelect(c);
     if (result) return result;

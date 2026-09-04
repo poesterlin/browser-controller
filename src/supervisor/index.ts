@@ -19,6 +19,7 @@ import {
 } from '../protocol/index.js';
 import type { BrowserSession } from '../session.js';
 import { QueuedSession, SessionError } from '../session.js';
+import { DomSnapshotHistory } from '../dom-diff.js';
 
 type Socket = WebSocket & {
   role?: 'controller' | 'extension';
@@ -31,6 +32,11 @@ const capabilities = [
   'click',
   'fill',
   'select',
+  'scroll',
+  'bounds',
+  'highlight',
+  'drag',
+  'activate',
   'wait',
   'evaluate',
   'press',
@@ -333,9 +339,7 @@ export class Supervisor {
             : c.selector
               ? 'screenshot.element'
               : 'screenshot.viewport'
-          : c.type === 'type'
-            ? 'fill'
-            : c.type;
+          : c.type;
       if (!s.adapter.capabilities().includes(required as never))
         return failure(id, 'capability_unavailable', `capability unavailable: ${required}`);
       const result = await s.execute(async () => {
@@ -347,7 +351,7 @@ export class Supervisor {
               ...((await s.adapter.navigate(c.url, c.timeout)) as object | undefined),
             };
           case 'dom':
-            return s.adapter.dom({
+            return finishAction(s, c, await s.adapter.dom({
               locator: c.locator ?? (c.selector ? { by: 'css', value: c.selector } : undefined),
               maxChars: c.maxChars,
               format: c.format,
@@ -358,7 +362,8 @@ export class Supervisor {
               within: c.within,
               nth: c.nth,
               itemLimit: c.itemLimit,
-            });
+              diff: c.diff,
+            }));
           case 'screenshot':
             return s.adapter.screenshot({ fullPage: c.fullPage, selector: c.selector, waitForActive: c.waitForActive });
           case 'scrape':
@@ -372,28 +377,35 @@ export class Supervisor {
             });
           case 'click':
             {
-              const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
+              const locator = c.locator ?? (c.selector ? { by: 'css' as const, value: c.selector } : undefined);
               const clickResult = await s.adapter.click(locator, c.within, c.nth, {
                 waitNavigation: c.waitNavigation,
                 timeout: c.timeout,
+                button: c.button,
+                double: c.double,
+                modifiers: c.modifiers,
+                offsetX: c.offsetX,
+                offsetY: c.offsetY,
+                holdMs: c.holdMs,
+                x: c.x,
+                y: c.y,
               });
-              return { action: 'clicked', locator, ...(c.within ? { within: c.within } : {}), ...(c.nth !== undefined ? { nth: c.nth } : {}), ...((clickResult as object) ?? {}) };
+              return finishAction(s, c, { action: 'clicked', ...(locator ? { locator } : { x: c.x, y: c.y }), ...(c.within ? { within: c.within } : {}), ...(c.nth !== undefined ? { nth: c.nth } : {}), ...((clickResult as object) ?? {}) });
             }
           case 'press':
             {
-              const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
+              const locator = c.locator ?? (c.selector ? { by: 'css' as const, value: c.selector } : undefined);
               await s.adapter.press(locator, c.key, c.within, c.nth);
-              return { action: 'pressed', locator, key: c.key, ...(c.within ? { within: c.within } : {}) };
+              return finishAction(s, c, { action: 'pressed', ...(locator ? { locator } : {}), key: c.key, ...(c.within ? { within: c.within } : {}) });
             }
           case 'fill':
-          case 'type':
             {
               const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
               const fillResult = (await s.adapter.fill(locator, c.text, c.within, c.nth)) as
                 | { ok?: boolean; valueLength?: number; verified?: boolean }
                 | string
                 | undefined;
-              return {
+              return finishAction(s, c, {
                 action: 'filled',
                 locator,
                 ...(c.within ? { within: c.within } : {}),
@@ -401,7 +413,19 @@ export class Supervisor {
                 ...(typeof fillResult === 'object' && fillResult?.verified !== undefined
                   ? { verified: fillResult.verified }
                   : {}),
-              };
+              });
+            }
+          case 'type':
+            {
+              const locator = c.locator ?? { by: 'css' as const, value: c.selector! };
+              const typeResult = await s.adapter.type(locator, c.text, {
+                within: c.within,
+                nth: c.nth,
+                delay: c.delay,
+                clear: c.clear,
+                submit: c.submit,
+              });
+              return finishAction(s, c, { action: 'typed', locator, characters: c.text.length, ...((typeResult as object) ?? {}) });
             }
           case 'select':
             {
@@ -409,11 +433,31 @@ export class Supervisor {
               const selectResult = await s.adapter.select(locator, {
                 value: c.value,
                 optionText: c.optionText,
+                values: c.values,
                 within: c.within,
                 nth: c.nth,
               });
-              return { action: 'selected', locator, ...((selectResult as object) ?? {}) };
+              return finishAction(s, c, { action: 'selected', locator, ...((selectResult as object) ?? {}) });
             }
+          case 'scroll':
+            return finishAction(s, c, await s.adapter.scroll(c) as object);
+          case 'bounds':
+            return s.adapter.bounds(c.locator, c.within, c.nth);
+          case 'highlight':
+            return s.adapter.highlight(c.locator, c.within, c.nth, c.duration);
+          case 'drag':
+            return finishAction(s, c, {
+              action: 'dragged',
+              ...((await s.adapter.drag(c.from, {
+                to: c.to,
+                fromNth: c.fromNth,
+                toNth: c.toNth,
+                toX: c.toX,
+                toY: c.toY,
+              })) as object),
+            });
+          case 'activate':
+            return s.adapter.activate();
           case 'wait':
             {
               const waitResult = await s.adapter.wait({
@@ -441,6 +485,10 @@ export class Supervisor {
       },
       c.type === 'scrape'
         ? (c.maxDuration ?? 120_000) + 75_000
+        : c.type === 'type'
+          ? Math.min(120_000, c.text.length * (c.delay ?? 0) + 10_000)
+        : c.type === 'drag'
+          ? 30_000
         : c.type === 'wait' || c.type === 'navigate'
         ? (c.timeout ?? 10_000) + 1_000
         : c.type === 'click'
@@ -468,6 +516,18 @@ export class Supervisor {
 }
 function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object';
+}
+
+async function finishAction(
+  session: QueuedSession,
+  command: { screenshotAfter?: boolean; intent?: string },
+  result: object,
+) {
+  return {
+    ...result,
+    ...(command.intent ? { intent: command.intent } : {}),
+    ...(command.screenshotAfter ? { screenshot: await session.adapter.screenshot({}) } : {}),
+  };
 }
 
 function sendSocket(socket: Socket, value: unknown) {
@@ -549,6 +609,7 @@ function makeExtensionSession(
   ref: { current: Socket | null; adapterId: string };
 } {
   let n = 0;
+  const domHistory = new DomSnapshotHistory();
   let handler: ((raw: unknown) => void) | null = null;
   const attach = (sock: Socket) => {
     if (handler) sock.on('message', handler);
@@ -611,11 +672,17 @@ function makeExtensionSession(
     navigate: (u, timeout) => call('navigate', { url: u, timeout }),
     screenshot: (o) => call('screenshot', o),
     scrape: (o) => call('scrape', o),
-    dom: (o) => call('dom', o),
+    dom: async (o) => domHistory.record(await call('dom', o), o.diff),
     click: (locator, within, nth, options) => call('click', { locator, within, nth, ...options }),
     press: (locator, key, within, nth) => call('press', { locator, key, within, nth }),
     fill: (locator, text, within, nth) => call('fill', { locator, text, within, nth }),
+    type: (locator, text, options) => call('type', { locator, text, ...options }),
     select: (locator, options) => call('select', { locator, ...options }),
+    scroll: (options) => call('scroll', options),
+    bounds: (locator, within, nth) => call('bounds', { locator, within, nth }),
+    highlight: (locator, within, nth, duration) => call('highlight', { locator, within, nth, duration }),
+    drag: (from, options) => call('drag', { from, ...options }),
+    activate: () => call('activate', {}),
     wait: (options) => call('wait', options),
     evaluate: (expression) => call('evaluate', { expression }),
     close: (reason) => call('close', { reason }),
