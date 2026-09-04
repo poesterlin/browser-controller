@@ -657,7 +657,7 @@ async function stitchedScreenshot(tabId, windowId, selector, returnBytes = false
   const outputWidth = Math.ceil(region.width * scale);
   const outputHeight = Math.ceil(region.height * scale);
   if (outputWidth > 32767 || outputHeight > 32767 || outputWidth * outputHeight > 268_000_000)
-    throw new Error('screenshot_too_large');
+    throw new Error(`screenshot_too_large: ${outputWidth}x${outputHeight}`);
   const canvas = new OffscreenCanvas(outputWidth, outputHeight);
   const context = canvas.getContext('2d');
   if (!context) throw new Error('screenshot_canvas_unavailable');
@@ -773,28 +773,28 @@ async function clickAndWait(tabId, message) {
 }
 
 async function navigateTab(tabId, url, timeout) {
-  const tab = await withTimeout(
+  await withTimeout(
     chrome.tabs.update(tabId, { url }),
     timeout,
     'navigation_timeout',
   );
-  if (tab?.status === 'complete')
-    return withTimeout(chrome.tabs.get(tabId), 2_000, 'tab_status_timeout');
-  await new Promise((resolve, reject) => {
-    let timer;
-    const listener = (id, info) => {
-      if (id !== tabId || info.status !== 'complete') return;
-      clearTimeout(timer);
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-    timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('navigation_timeout'));
-    }, timeout);
-  });
-  return withTimeout(chrome.tabs.get(tabId), 2_000, 'tab_status_timeout');
+  const deadline = Date.now() + timeout;
+  let stableUrl;
+  let stableSince = 0;
+  while (Date.now() <= deadline) {
+    const tab = await withTimeout(chrome.tabs.get(tabId), 2_000, 'tab_status_timeout');
+    if (tab.status === 'complete' && tab.url) {
+      if (tab.url !== stableUrl) {
+        stableUrl = tab.url;
+        stableSince = Date.now();
+      } else if (Date.now() - stableSince >= 750) return tab;
+    } else {
+      stableUrl = undefined;
+      stableSince = 0;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('navigation_timeout');
 }
 
 function bytesToBase64(bytes) {
@@ -866,6 +866,7 @@ async function scrapeRoutes(tabId, windowId, message) {
       let screenshot;
       try {
         mhtml = await captureMhtml(tabId);
+        await new Promise((resolve) => setTimeout(resolve, 500));
         const fullPage = await stitchedScreenshot(tabId, windowId, undefined, true, deadline);
         screenshot = fullPage.bytes;
       } catch (error) {
