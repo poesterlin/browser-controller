@@ -5,7 +5,7 @@ description: Control the user's existing Chromium tab with browserctl when a tas
 
 # Browser Controller
 
-Use `~/.local/bin/browserctl` to control one user-owned Chromium tab through the paired extension. Source lives at the repository root.
+Use `~/.local/bin/browserctl` to control one user-owned Chromium tab through the paired extension.
 
 ## Connect
 
