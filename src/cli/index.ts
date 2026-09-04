@@ -725,7 +725,7 @@ async function main() {
             console.error(
                `DOM output truncated to ${result.format === 'json' ? 'tree' : result.returnedChars} of ${result.totalChars} characters; use --max-chars to change the limit.`,
             );
-          if (result?.diff) {
+          if (result?.diff && !jsonOutput && !domOutput) {
             if (result.diff.baseline) console.error('DOM diff baseline established.');
             else {
               for (const line of result.diff.removed) console.log(`- ${line}`);

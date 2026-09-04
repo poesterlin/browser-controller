@@ -1281,7 +1281,7 @@ async function handle(message, socket) {
           result: {
             extensionVersion: chrome.runtime.getManifest().version,
             scrapeMode: 'full-page-settled',
-            actionSurface: 'locator-actions-v1',
+            actionSurface: 'locator-actions-v1.1',
             paired: Number.isInteger(state.controlTabId),
             tabAvailable: !!controlTab,
             tabId: controlTab?.id ?? null,
