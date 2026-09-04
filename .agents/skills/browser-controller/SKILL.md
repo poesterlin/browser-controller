@@ -73,9 +73,9 @@ browserctl click --within-text Hardware-Basteln --role button --name Edit --json
 `press` focuses the located element and sends a native key chord through Chrome DevTools Protocol. Modifiers are `ctrl`, `alt`, `shift`, and `meta`; join them with `+`. Chrome briefly attaches its debugger for each press and detaches immediately afterward.
 Omit the locator to send the chord to the page's current active element.
 
-`scroll` acts on the page by default or a uniquely located container. It reports the final position, actual delta, and `moved`; treat `moved: false` as a stall. `--into-view` requires a locator and centers it. Use `bounds` to get viewport/page coordinates and `inViewport` before falling back to `click --at X,Y`. Prefer semantic clicks whenever possible.
+`scroll` acts on the page by default or a uniquely located container. It reports the final position, actual delta, and `moved`; treat `moved: false` as a stall. `--into-view` requires a locator and centers it. Locator clicks also scroll their target into view. Use `bounds` before coordinate input: `x`/`y` are viewport coordinates, while `pageX`/`pageY` include document scroll. Prefer semantic clicks whenever possible.
 
-Rich clicks support `--button`, `--double`, repeatable `--modifier`, center-relative `--offset-x`/`--offset-y`, and `--hold-ms`. `drag` uses prefixed source/target locators such as `--from-text Todo --to-text Done`; coordinate targets are a fallback. `highlight` outlines a unique match without waiting for the highlight duration. `activate` focuses only the paired tab and its window.
+Rich clicks support `--button`, `--double`, repeatable `--modifier`, center-relative `--offset-x`/`--offset-y`, and `--hold-ms`. `drag` uses prefixed source/target locators such as `--from-text Todo --to-text Done`; coordinate targets are a fallback. Native drag requires source and target to share the current viewport, so use `bounds` and `scroll --into-view` first. `highlight` outlines a unique match without waiting for the highlight duration. `activate` visibly focuses the paired tab and window; use it only when the user requested or approved that focus change.
 
 Use `--screenshot FILE.png` on `click`, `fill`, `type`, `select`, `press`, `scroll`, `drag`, or `dom` to capture the result in the same controller round-trip. Use `--intent TEXT` on mutations to retain the human-readable purpose in structured output.
 
@@ -91,7 +91,7 @@ DOM output has five formats via `--format` (default `clean_html`):
 
 `--max-chars` (1–1,000,000, default 50,000) bounds the output and truncation is reported, including `totalItems` for `interactive` and `summary`. `--text-chars` (default 100) controls per-node text clipping. `--depth` bounds `clean_html` and `json` tree depth. When a locator matches repeated records, `--offset` and `--limit` select a stable slice and the result reports matched and returned counts. Scope before raising limits. `evaluate` safely serializes objects, arrays, bigints, functions, and circular references; return structured values directly rather than wrapping them in `JSON.stringify`.
 
-Interactive and summary items include `inViewport`. `dom --diff` compares against the previous DOM read in the same session; the first call establishes a baseline, and later calls return up to 200 added and removed lines. Use `dom --output FILE` for large HTML or JSON payloads.
+Interactive and summary items include `inViewport`. `dom --diff` compares against the previous read with the same format, locator/scope, index, and pagination in that session. The first matching call establishes a baseline; later calls return up to 200 added and removed lines. Use `dom --output FILE` for large HTML or JSON payloads.
 
 Screenshots capture the active paired tab. The default captures its viewport. `--full-page` and `--selector CSS` scroll and stitch the full document or element, then restore the original scroll position. Pages with fixed or sticky content may show stitching artifacts.
 
@@ -107,7 +107,7 @@ Use `--json` for a stable `{ "ok": true, "result": ... }` result envelope. Mutat
 2. Navigate, then run `dom --format interactive` to discover controls. Fall back to `dom` on a focused selector or a small `evaluate` summary when needed.
 3. Locate controls by role/name or label when possible; use visible text or CSS when needed.
 4. Use `fill` for fields and `click` for the site's actual controls. When the user requests a UI workflow, keep the mutation in the UI instead of substituting a direct HTTP request.
-5. Wait for the observable completion condition.
+5. Wait for the observable completion condition. `type --submit` sends Enter but does not assume navigation; follow it with a URL, title, or page-state wait.
 6. Verify the result from the page. Stop before repeating a mutation when its outcome is uncertain.
 7. If scroll, drag, or coordinate actions stall four times, stop and reassess the locator or page state instead of repeating blindly.
 8. Close the session when finished. Closing leaves the browser tab open.
