@@ -438,7 +438,11 @@ export class Supervisor {
                 within: c.within,
                 nth: c.nth,
               });
-              return finishAction(s, c, { action: 'selected', locator, ...((selectResult as object) ?? {}) });
+              return finishAction(s, c, {
+                action: 'selected',
+                locator,
+                ...(isObj(selectResult) ? selectResult : {}),
+              });
             }
           case 'scroll':
             return finishAction(s, c, await s.adapter.scroll(c) as object);

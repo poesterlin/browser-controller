@@ -1228,6 +1228,7 @@ async function execute(message) {
     if (result === 'element_not_found') throw new Error('element_not_found');
     if (result === 'element_not_fillable') throw new Error('element_not_fillable');
     if (result === 'element_not_selectable') throw new Error('element_not_selectable');
+    if (result === 'element_not_multi_select') throw new Error('element_not_multi_select');
     if (result === 'option_not_found') throw new Error('option_not_found');
     if (typeof result === 'string' && result.startsWith('ambiguous_locator:')) throw new Error(result);
     if (typeof result === 'string' && (result.startsWith('ambiguous_scope:') || result === 'scope_not_found')) throw new Error(result);
@@ -1250,6 +1251,8 @@ async function execute(message) {
               ? 'option_not_found'
               : description.includes('element_not_selectable')
                 ? 'element_not_selectable'
+                : description.includes('element_not_multi_select')
+                  ? 'element_not_multi_select'
                 : description.includes('paired_control_tab_not_active')
                   ? 'paired_tab_inactive'
             : description.includes('wait_timeout') || description.includes('navigation_timeout')
@@ -1281,7 +1284,7 @@ async function handle(message, socket) {
           result: {
             extensionVersion: chrome.runtime.getManifest().version,
             scrapeMode: 'full-page-settled',
-            actionSurface: 'locator-actions-v1.1',
+            actionSurface: 'locator-actions-v1.2',
             paired: Number.isInteger(state.controlTabId),
             tabAvailable: !!controlTab,
             tabId: controlTab?.id ?? null,
