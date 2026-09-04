@@ -1072,7 +1072,7 @@ async function handle(message, socket) {
           ok: true,
           result: {
             extensionVersion: chrome.runtime.getManifest().version,
-            scrapeMode: 'full-page',
+            scrapeMode: 'full-page-settled',
             paired: Number.isInteger(state.controlTabId),
             tabAvailable: !!controlTab,
             tabId: controlTab?.id ?? null,
