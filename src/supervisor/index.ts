@@ -45,6 +45,7 @@ const capabilities = [
   'screenshot.fullPage',
   'screenshot.element',
   'scrape.snapshot',
+  'scrollgif.record',
 ] as const;
 export class Supervisor {
   readonly token = token();
@@ -334,6 +335,8 @@ export class Supervisor {
       const required =
         c.type === 'scrape'
           ? 'scrape.snapshot'
+          : c.type === 'scrollgif'
+          ? 'scrollgif.record'
           : c.type === 'screenshot'
           ? c.fullPage
             ? 'screenshot.fullPage'
@@ -375,6 +378,21 @@ export class Supervisor {
               maxRoutes: c.maxRoutes,
               maxDuration: c.maxDuration,
               dedicatedWindow: c.dedicatedWindow,
+            });
+          case 'scrollgif':
+            return s.adapter.scrollgif({
+              selector: c.selector,
+              fps: c.fps,
+              step: c.step,
+              duration: c.duration,
+              maxWidth: c.maxWidth,
+              settleMs: c.settleMs,
+              holdMs: c.holdMs,
+              loop: c.loop,
+              maxFrames: c.maxFrames,
+              dither: c.dither,
+              dedicatedWindow: c.dedicatedWindow,
+              waitForActive: c.waitForActive,
             });
           case 'click':
             {
@@ -490,7 +508,9 @@ export class Supervisor {
       },
       c.type === 'scrape'
         ? (c.maxDuration ?? 120_000) + 75_000
-        : c.type === 'type'
+        : c.type === 'scrollgif'
+          ? 900_000
+          : c.type === 'type'
           ? Math.min(120_000, c.text.length * (c.delay ?? 0) + 10_000)
         : c.type === 'drag'
           ? 30_000
@@ -677,6 +697,7 @@ function makeExtensionSession(
     navigate: (u, timeout) => call('navigate', { url: u, timeout }),
     screenshot: (o) => call('screenshot', o),
     scrape: (o) => call('scrape', o),
+    scrollgif: (o) => call('scrollgif', o),
     dom: async (o) => domHistory.record(
       await call('dom', o),
       o.diff,

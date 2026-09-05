@@ -14,6 +14,8 @@ for (const file of [
   'async.js',
   'scrape-archive.js',
   'artifact-chunks.js',
+  'gif.js',
+  'scroll-easing.js',
   'content.js',
   'options.html',
   'options.js',

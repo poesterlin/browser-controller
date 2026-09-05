@@ -29,6 +29,7 @@ const COMMAND_TYPES = new Set<CommandType>([
   'status',
   'navigate',
   'scrape',
+  'scrollgif',
   'screenshot',
   'dom',
   'click',
@@ -62,6 +63,13 @@ const INTEGER_RANGES: Array<[(c: RecordInput) => unknown, number, number, string
   [(c) => c.maxBytes, 1_000_000, 100_000_000, 'maxBytes must be between 1000000 and 100000000'],
   [(c) => c.maxRoutes, 1, 50, 'maxRoutes must be between 1 and 50'],
   [(c) => c.maxDuration, 10_000, 600_000, 'maxDuration must be between 10000 and 600000'],
+  [(c) => c.fps, 1, 30, 'fps must be between 1 and 30'],
+  [(c) => c.step, 1, 65535, 'step must be between 1 and 65535'],
+  [(c) => c.duration, 250, 600_000, 'duration must be between 250 and 600000'],
+  [(c) => c.maxWidth, 0, 100_000, 'maxWidth must be between 0 and 100000'],
+  [(c) => c.settleMs, 0, 10_000, 'settleMs must be between 0 and 10000'],
+  [(c) => c.loop, 0, 1_000, 'loop must be between 0 and 1000'],
+  [(c) => c.maxFrames, 1, 10_000, 'maxFrames must be between 1 and 10000'],
   [(c) => c.amount, 1, 100_000, 'amount must be between 1 and 100000'],
   [(c) => c.holdMs, 0, 10_000, 'holdMs must be between 0 and 10000'],
   [(c) => c.duration, 100, 30_000, 'duration must be between 100 and 30000'],
@@ -84,9 +92,9 @@ function validateCommon(c: RecordInput, type: CommandType): FailureResult | unde
     return { ok: false, code: 'invalid_request', message: 'url is required' };
   if (type === 'scrape' && c.url !== undefined && !string(c.url))
     return { ok: false, code: 'invalid_request', message: 'url must be a string' };
-  if (type === 'scrape' && c.dedicatedWindow !== undefined && typeof c.dedicatedWindow !== 'boolean')
+  if ((type === 'scrape' || type === 'scrollgif') && c.dedicatedWindow !== undefined && typeof c.dedicatedWindow !== 'boolean')
     return { ok: false, code: 'invalid_request', message: 'dedicatedWindow must be a boolean' };
-  if ((type === 'dom' || type === 'screenshot') && c.selector !== undefined && !string(c.selector))
+  if ((type === 'dom' || type === 'screenshot' || type === 'scrollgif') && c.selector !== undefined && !string(c.selector))
     return { ok: false, code: 'invalid_request', message: 'selector must be a string' };
   if (type === 'press' && !string(c.key))
     return { ok: false, code: 'invalid_request', message: 'key is required' };
@@ -100,7 +108,7 @@ function validateCommon(c: RecordInput, type: CommandType): FailureResult | unde
     return { ok: false, code: 'invalid_request', message: 'expression is required' };
   if (type === 'click' && c.waitNavigation !== undefined && typeof c.waitNavigation !== 'boolean')
     return { ok: false, code: 'invalid_request', message: 'waitNavigation must be a boolean' };
-  for (const name of ['double', 'clear', 'submit', 'intoView', 'diff', 'screenshotAfter'])
+  for (const name of ['double', 'clear', 'submit', 'intoView', 'diff', 'screenshotAfter', 'dither'])
     if (c[name] !== undefined && typeof c[name] !== 'boolean')
       return { ok: false, code: 'invalid_request', message: `${name} must be a boolean` };
   if (c.intent !== undefined && !string(c.intent))
@@ -218,6 +226,8 @@ function validateFields(c: RecordInput, type: CommandType): FailureResult | unde
     if (!locator(c.locator) && (c.within !== undefined || c.nth !== undefined))
       return { ok: false, code: 'invalid_request', message: 'page scroll does not accept locator options' };
   }
+  if (type === 'scrollgif' && c.step !== undefined && c.duration !== undefined)
+    return { ok: false, code: 'invalid_request', message: 'scrollgif accepts step or duration, not both' };
   if (type === 'select') {
     const result = validateSelect(c);
     if (result) return result;

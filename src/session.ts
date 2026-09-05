@@ -6,6 +6,7 @@ import type {
   Locator,
   ScreenshotResult,
   ScrapeResult,
+  ScrollGifResult,
 } from './protocol/index.js';
 export interface ScreenshotOptions {
   fullPage?: boolean;
@@ -19,6 +20,20 @@ export interface ScrapeOptions {
   maxRoutes?: number;
   maxDuration?: number;
   dedicatedWindow?: boolean;
+}
+export interface ScrollGifOptions {
+  selector?: string;
+  fps?: number;
+  step?: number;
+  duration?: number;
+  maxWidth?: number;
+  settleMs?: number;
+  holdMs?: number;
+  loop?: number;
+  maxFrames?: number;
+  dither?: boolean;
+  dedicatedWindow?: boolean;
+  waitForActive?: number;
 }
 export interface DomOptions {
   locator?: Locator;
@@ -61,6 +76,7 @@ export interface BrowserSession {
   navigate(url: string, timeout?: number): Promise<unknown>;
   screenshot(options: ScreenshotOptions): Promise<ScreenshotResult>;
   scrape(options: ScrapeOptions): Promise<ScrapeResult>;
+  scrollgif(options: ScrollGifOptions): Promise<ScrollGifResult>;
   dom(options: DomOptions): Promise<DomResult>;
   click(locator: Locator | undefined, within: Locator | undefined, nth: number | undefined, options: ActionOptions & { waitNavigation?: boolean; timeout?: number; button?: 'left' | 'right' | 'middle'; double?: boolean; modifiers?: Array<'ctrl' | 'alt' | 'shift' | 'meta'>; offsetX?: number; offsetY?: number; holdMs?: number; x?: number; y?: number }): Promise<unknown>;
   press(locator: Locator | undefined, key: string, within?: Locator, nth?: number): Promise<unknown>;

@@ -46,6 +46,7 @@ browserctl wait --url URL [--timeout MS]
 browserctl wait --url-glob '**/karriere/**' [--timeout MS]
 browserctl evaluate --expression JAVASCRIPT
 browserctl screenshot [--full-page | --selector CSS] [--wait-for-active MS] --output FILE.png
+browserctl scrollgif [--output FILE.gif] [--fps N] (--step PX | --duration-ms MS) [--selector CSS] [--max-width N] [--dedicated-window]
 browserctl scrape [URL] --output page-scrape.zip [--max-routes 20] [--max-bytes 50000000] [--max-duration 120000] [--dedicated-window]
 browserctl close
 ```
@@ -107,6 +108,8 @@ Interactive and summary records include `inViewport`. `dom --diff` compares the 
 `scrape` captures the requested page and discovered same-origin routes into one ZIP. Each route gets a rendered MHTML snapshot (including loaded assets) and a full-page stitched PNG. Sticky and fixed elements are retained only in the first tile. Discovery strips query strings and fragments, never leaves the starting origin, and is bounded to 20 routes, 50 MB, and 120 seconds by default (hard limits: 50 routes, 100 MB, and 10 minutes). Every CDP, screenshot, and link-discovery operation has a deadline; failed secondary routes are skipped. The archive can contain content visible to your signed-in browser; review it before sharing.
 
 Use `scrape --dedicated-window` when the paired tab cannot remain active among other tabs. This explicitly moves only the paired tab into a new non-focused one-tab window before capture; it never selects or moves another tab.
+
+`scrollgif` records the paired tab (or a scrollable container via `--selector CSS`) scrolling smoothly from top to bottom and saves an animated GIF. Smoothness comes from capture density, not speed: every frame scrolls a small step, waits for the paint to settle, and is captured before the next step (via the CDP screenshot API, which has no capture-rate quota). The scroll starts at 70% of base speed and eases up to a hard cap of 130% of base speed, and the first and last frames hold for a pause at the top and bottom. Options: `--fps` (default 25), `--step` for average pixels per frame (default: viewport height / 32, minimum 12), `--duration-ms` to set the animation length instead of the step, `--max-width` (default 1200, `0` disables downscaling), `--settle-ms` (default 60), `--hold-ms` (default 800), `--loop` (0 = forever), `--max-frames` (default 2500), and `--dedicated-window`/`--wait-for-active` like screenshots. Frames are encoded with per-frame median-cut palettes and spec-conformant LZW; dithering is off by default so flat design stays crisp and shimmer-free — pass `--dither` for Floyd–Steinberg dithering on photo-heavy pages. The page's original scroll position is restored afterwards.
 
 `wait` accepts exactly one locator or `--url`. Locator waits default to `visible`. DOM output is limited to 50,000 characters by default; `--max-chars` accepts values up to 1,000,000 and reports when output was truncated.
 

@@ -2,6 +2,8 @@ import { CommandCache } from './command-cache.js';
 import { selectControlTab } from './control-tab.js';
 import { withTimeout } from './async.js';
 import { createScrapeArchive } from './scrape-archive.js';
+import { GifEncoder } from './gif.js';
+import { easedScrollPositions } from './scroll-easing.js';
 import { artifactChunks } from './artifact-chunks.js';
 
 const state = {
@@ -83,6 +85,42 @@ async function page(tabId, message) {
         scrollTo(m.x, m.y);
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         return { x: scrollX, y: scrollY };
+      }
+      if (m.type === 'scrollgif_measure') {
+        if (m.selector) {
+          const el = document.querySelector(m.selector);
+          if (!el) return 'element_not_found';
+          const maxScrollY = Math.max(0, el.scrollHeight - el.clientHeight);
+          if (!maxScrollY) return 'element_not_scrollable';
+          return {
+            mode: 'element',
+            maxScrollY,
+            viewportHeight: el.clientHeight,
+            scroll: { x: el.scrollLeft, y: el.scrollTop },
+          };
+        }
+        const root = document.scrollingElement ?? document.documentElement;
+        return {
+          mode: 'page',
+          maxScrollY: Math.max(0, root.scrollHeight - innerHeight),
+          maxScrollX: Math.max(0, root.scrollWidth - innerWidth),
+          viewportHeight: innerHeight,
+          scroll: { x: scrollX, y: scrollY },
+        };
+      }
+      if (m.type === 'scrollgif_scroll') {
+        let scrolled;
+        if (m.selector) {
+          const el = document.querySelector(m.selector);
+          if (!el) return 'element_not_found';
+          el.scrollTo({ left: m.x, top: m.y, behavior: 'instant' });
+          scrolled = { x: el.scrollLeft, y: el.scrollTop };
+        } else {
+          scrollTo({ left: m.x, top: m.y, behavior: 'instant' });
+          scrolled = { x: scrollX, y: scrollY };
+        }
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return scrolled;
       }
       if (m.type === 'screenshot_sticky') {
         const key = '__browserControllerStickyRestore';
@@ -1088,6 +1126,127 @@ async function scrapeRoutes(tabId, windowId, message) {
   }
 }
 
+// Records the paired tab (or a scrollable container inside it) scrolling from
+// top to bottom. Smoothness comes from small scroll steps captured as discrete
+// frames, played back at a fixed frame rate. Priorities are smoothness and
+// capture reliability, not speed: every frame scrolls, settles, and is captured
+// before the next step starts.
+async function recordScroll(tabId, message) {
+  let controlTab = await chrome.tabs.get(tabId);
+  let [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
+  if (active?.id !== tabId && message.dedicatedWindow) {
+    const isolated = await chrome.windows.create({ tabId, focused: false });
+    if (!isolated?.id) throw new Error('dedicated_window_failed');
+    controlTab = await chrome.tabs.get(tabId);
+    [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
+  }
+  if (message.waitForActive) {
+    const activeWait = await waitForTab(tabId, 'tab-active', message.waitForActive);
+    if (activeWait.action !== 'matched') throw new Error('paired_control_tab_not_active');
+    [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
+  }
+  if (active?.id !== tabId)
+    throw new Error('paired_control_tab_not_active: refusing to record a different active tab');
+
+  const selector = typeof message.selector === 'string' && message.selector ? message.selector : undefined;
+  const measureResponse = (await page(tabId, { type: 'scrollgif_measure', selector }))[0];
+  if (measureResponse?.error)
+    throw new Error(`page_world_error: ${measureResponse.error.message ?? String(measureResponse.error)}`);
+  if (measureResponse?.result === 'element_not_found') throw new Error('element_not_found');
+  if (measureResponse?.result === 'element_not_scrollable') throw new Error('element_not_scrollable');
+  const metrics = measureResponse?.result;
+  if (!metrics?.mode) throw new Error('scrollgif_measure_unavailable');
+
+  const total = metrics.maxScrollY;
+  const fps = message.fps ?? 25;
+  const maxFrames = message.maxFrames ?? 2500;
+  const settleMs = Math.max(0, Math.round(message.settleMs ?? 60));
+  const holdMs = Math.max(0, Math.round(message.holdMs ?? 800));
+  const holdDelay = Math.max(1, Math.round(holdMs / 10));
+  const original = { x: metrics.scroll.x, y: metrics.scroll.y };
+  const scrollTo = (y) => page(tabId, { type: 'scrollgif_scroll', selector, x: original.x, y });
+
+  const scroll = async (y) => {
+    const response = (await scrollTo(y))[0];
+    if (response?.error)
+      throw new Error(`page_world_error: ${response.error.message ?? String(response.error)}`);
+    return response?.result;
+  };
+
+  let positions = [];
+  if (total <= 0) {
+    positions = [0];
+  } else {
+    let frameCount;
+    if (message.duration != null)
+      frameCount = Math.max(1, Math.round((message.duration * fps) / 1000));
+    else {
+      const step = message.step ?? Math.max(12, Math.round(metrics.viewportHeight / 32));
+      frameCount = Math.max(1, Math.ceil(total / step));
+    }
+    positions = easedScrollPositions(total, frameCount);
+  }
+  if (positions[positions.length - 1] !== total) positions.push(total);
+  if (positions.length > maxFrames)
+    throw new Error(
+      `scrollgif_too_many_frames: ${positions.length} frames required; raise --step, lower --duration-ms, or raise --max-frames`,
+    );
+
+  // captureVisibleTab is quota-limited to ~2 captures per second by Chromium,
+  // which would cap the animation at 2 fps. The debugger's Page.captureScreenshot
+  // has no such quota and captures the same visible surface.
+  let encoder;
+  let context;
+  let frames = 0;
+  await withDebugger(tabId, async (send) => {
+    const capture = async () => {
+      const shot = await send('Page.captureScreenshot', { format: 'png' });
+      return createImageBitmap(await (await fetch(`data:image/png;base64,${shot.data}`)).blob());
+    };
+    try {
+      await scroll(0);
+      if (settleMs) await new Promise((resolve) => setTimeout(resolve, settleMs));
+      for (let index = 0; index < positions.length; index += 1) {
+        if (index > 0) {
+          await scroll(positions[index]);
+          if (settleMs) await new Promise((resolve) => setTimeout(resolve, settleMs));
+        }
+        const bitmap = await capture();
+        if (!encoder) {
+          // Output dimensions are fixed once from the first capture so that a
+          // later size change (e.g. a scrollbar appearing) only rescales the
+          // frame instead of mismatching the encoder.
+          const maxWidth = message.maxWidth ?? 1200;
+          const width = !maxWidth || bitmap.width <= maxWidth ? bitmap.width : maxWidth;
+          const height = Math.max(1, Math.round((bitmap.height * width) / bitmap.width));
+          encoder = new GifEncoder({ width, height, fps, loop: message.loop ?? 0 });
+          const canvas = new OffscreenCanvas(width, height);
+          context = canvas.getContext('2d', { willReadFrequently: true });
+        }
+        context.drawImage(bitmap, 0, 0, encoder.width, encoder.height);
+        bitmap.close();
+        const hold = index === 0 || index === positions.length - 1 ? holdDelay : undefined;
+        encoder.addFrame(context.getImageData(0, 0, encoder.width, encoder.height).data, hold);
+        frames += 1;
+      }
+    } finally {
+      await scroll(original.y).catch(() => {});
+    }
+  });
+  const archive = encoder.finish();
+  const holdExtra = positions.length >= 2 ? 2 * Math.max(0, holdDelay - encoder.delay) : 0;
+  return {
+    archive,
+    mimeType: 'image/gif',
+    width: encoder.width,
+    height: encoder.height,
+    frames,
+    pixelsScrolled: total,
+    durationMs: frames * encoder.delay * 10 + holdExtra * 10,
+    bytes: archive.length,
+  };
+}
+
 async function execute(message) {
   if (!state.tabId)
     return {
@@ -1119,6 +1278,8 @@ async function execute(message) {
       }
       if (active?.id !== state.tabId) throw new Error('paired_control_tab_not_active');
       result = await scrapeRoutes(state.tabId, controlTab.windowId, message);
+    } else if (message.type === 'scrollgif') {
+      result = await recordScroll(state.tabId, message);
     } else if (message.type === 'click') {
       result = await clickAndWait(state.tabId, message);
     } else if (message.type === 'press') {
@@ -1253,8 +1414,12 @@ async function execute(message) {
                 ? 'element_not_selectable'
                 : description.includes('element_not_multi_select')
                   ? 'element_not_multi_select'
-                : description.includes('paired_control_tab_not_active')
-                  ? 'paired_tab_inactive'
+                  : description.includes('element_not_scrollable')
+                    ? 'element_not_scrollable'
+                    : description.includes('scrollgif_too_many_frames')
+                      ? 'scrollgif_too_many_frames'
+                      : description.includes('paired_control_tab_not_active')
+                        ? 'paired_tab_inactive'
             : description.includes('wait_timeout') || description.includes('navigation_timeout')
             ? 'timeout'
             : 'adapter_error',

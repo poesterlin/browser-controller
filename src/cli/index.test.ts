@@ -319,6 +319,92 @@ describe('CLI transport', () => {
     });
   });
 
+  test('writes a scroll GIF returned by the extension', async () => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'browserctl-cli-test-'));
+    const runtime = path.join(temp, 'browser-controller');
+    const output = path.join(temp, 'page-scroll.gif');
+    await fs.mkdir(runtime, { recursive: true });
+    const token = 'a'.repeat(64);
+    const gif = Buffer.from('GIF89a-scroll-frames');
+    const http = await listeningServer();
+    const server = new WebSocketServer({ server: http });
+    cleanups.push(
+      () => new Promise<void>((resolve) => server.close(() => http.close(() => resolve()))),
+      () => fs.rm(temp, { recursive: true, force: true }),
+    );
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server address');
+    await fs.writeFile(
+      path.join(runtime, 'connection.json'),
+      JSON.stringify({ url: `ws://127.0.0.1:${address.port}`, pid: process.pid, token, version: 1 }),
+    );
+    server.on('connection', (socket) => {
+      socket.on('message', (raw) => {
+        const message = JSON.parse(raw.toString());
+        if (message.kind === 'hello')
+          socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: {} }));
+        else if (message.kind === 'command')
+          {
+            socket.send(JSON.stringify({
+              version: 1,
+              id: message.id,
+              ok: true,
+              event: 'artifact_chunk',
+              index: 0,
+              data: gif.toString('base64'),
+            }));
+            socket.send(JSON.stringify({
+              version: 1,
+              id: message.id,
+              ok: true,
+              result: {
+                chunks: 1,
+                mimeType: 'image/gif',
+                width: 1200,
+                height: 800,
+                frames: 42,
+                pixelsScrolled: 3360,
+                durationMs: 2100,
+              },
+            }));
+          }
+      });
+    });
+
+    const child = spawn(
+      process.execPath,
+      [
+        path.join(import.meta.dir, 'index.ts'),
+        'scrollgif',
+        '--output', output,
+        '--fps', '20',
+        '--duration-ms', '2100',
+        '--dedicated-window',
+        '--json',
+      ],
+      { env: { ...process.env, XDG_RUNTIME_DIR: temp }, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let stdout = '';
+    child.stdout.on('data', (chunk) => (stdout += chunk));
+    const exitCode = await new Promise<number | null>((resolve) => child.once('close', resolve));
+
+    expect(exitCode).toBe(0);
+    expect(await fs.readFile(output)).toEqual(gif);
+    expect(JSON.parse(stdout)).toEqual({
+      ok: true,
+      result: {
+        action: 'scrollgif-saved',
+        output,
+        bytes: gif.length,
+        frames: 42,
+        width: 1200,
+        height: 800,
+        pixelsScrolled: 3360,
+        durationMs: 2100,
+      },
+    });
+  });
+
   test('parses scroll, real type, and coordinate click actions', async () => {
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'browserctl-cli-test-'));
     const runtime = path.join(temp, 'browser-controller');
@@ -342,12 +428,37 @@ describe('CLI transport', () => {
       if (message.kind === 'hello')
         return socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: {} }));
       commands.push(message.command);
+      if (message.command.type === 'scrollgif') {
+        socket.send(JSON.stringify({
+          version: 1,
+          id: message.id,
+          ok: true,
+          event: 'artifact_chunk',
+          index: 0,
+          data: Buffer.from('GIF89a').toString('base64'),
+        }));
+        return socket.send(JSON.stringify({
+          version: 1,
+          id: message.id,
+          ok: true,
+          result: {
+            chunks: 1,
+            mimeType: 'image/gif',
+            width: 100,
+            height: 80,
+            frames: 2,
+            pixelsScrolled: 160,
+            durationMs: 100,
+          },
+        }));
+      }
       socket.send(JSON.stringify({ version: 1, id: message.id, ok: true, result: { action: message.command.type } }));
     }));
     const invocations = [
       ['scroll', '--text', 'More', '--into-view', '--json'],
       ['type', '--label', 'Search', '--value', 'kebap', '--clear', '--delay', '25', '--submit', '--json'],
       ['click', '--at', '120,240', '--button', 'right', '--json'],
+      ['scrollgif', '--fps', '25', '--step', '40', '--selector', '.feed', '--json'],
     ];
     for (const invocationArgs of invocations) {
       const child = spawn(process.execPath, [path.join(import.meta.dir, 'index.ts'), ...invocationArgs], {
@@ -360,6 +471,7 @@ describe('CLI transport', () => {
       { type: 'scroll', session: 'last', locator: { by: 'text', value: 'More', exact: false }, intoView: true },
       { type: 'type', session: 'last', locator: { by: 'label', value: 'Search', exact: false }, text: 'kebap', delay: 25, clear: true, submit: true },
       { type: 'click', session: 'last', button: 'right', x: 120, y: 240 },
+      { type: 'scrollgif', session: 'last', selector: '.feed', fps: 25, step: 40, dedicatedWindow: false },
     ]);
   });
 });

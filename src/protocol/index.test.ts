@@ -274,6 +274,76 @@ describe('protocol validation', () => {
       }),
     ).toMatchObject({ code: 'invalid_request' });
   });
+  test('validates scrollgif capture options', () => {
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrollgif',
+        kind: 'command',
+        command: {
+          type: 'scrollgif',
+          session: 's',
+          fps: 20,
+          duration: 4000,
+          maxWidth: 1200,
+          settleMs: 60,
+          holdMs: 300,
+          loop: 0,
+          maxFrames: 2500,
+          dedicatedWindow: true,
+          waitForActive: 5000,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrollgif-step',
+        kind: 'command',
+        command: { type: 'scrollgif', session: 's', step: 48 },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrollgif-selector',
+        kind: 'command',
+        command: { type: 'scrollgif', session: 's', selector: '.scroll-pane', fps: 25 },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrollgif-fps',
+        kind: 'command',
+        command: { type: 'scrollgif', session: 's', fps: 0 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrollgif-step-and-duration',
+        kind: 'command',
+        command: { type: 'scrollgif', session: 's', step: 40, duration: 3000 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrollgif-duration',
+        kind: 'command',
+        command: { type: 'scrollgif', session: 's', duration: 100 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'scrollgif-dedicated-window',
+        kind: 'command',
+        command: { type: 'scrollgif', session: 's', dedicatedWindow: 'yes' },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+  });
   test('validates locator-first action commands and coordinate fallbacks', () => {
     for (const command of [
       { type: 'scroll', session: 's', direction: 'down', amount: 400 },

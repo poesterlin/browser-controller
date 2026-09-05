@@ -15,6 +15,7 @@ export type Capability =
   | 'drag'
   | 'activate'
   | 'scrape.snapshot'
+  | 'scrollgif.record'
   | 'screenshot.viewport'
   | 'screenshot.fullPage'
   | 'screenshot.element';
@@ -38,6 +39,22 @@ export type Command =
       maxRoutes?: number;
       maxDuration?: number;
       dedicatedWindow?: boolean;
+    }
+  | {
+      type: 'scrollgif';
+      session: string;
+      selector?: string;
+      fps?: number;
+      step?: number;
+      duration?: number;
+      maxWidth?: number;
+      settleMs?: number;
+      holdMs?: number;
+      loop?: number;
+      maxFrames?: number;
+      dither?: boolean;
+      dedicatedWindow?: boolean;
+      waitForActive?: number;
     }
   | { type: 'screenshot'; session: string; fullPage?: boolean; selector?: string; waitForActive?: number }
   | {
@@ -216,6 +233,17 @@ export interface ScrapeResult {
   routes: number;
   skippedRoutes?: number;
   deadlineReached?: boolean;
+  chunks?: string[];
+}
+export interface ScrollGifResult {
+  mimeType: 'image/gif';
+  url?: string;
+  width: number;
+  height: number;
+  frames: number;
+  pixelsScrolled: number;
+  durationMs: number;
+  bytes: number;
   chunks?: string[];
 }
 export type DomFormat = 'interactive' | 'summary' | 'clean_html' | 'json' | 'html';

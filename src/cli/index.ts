@@ -18,7 +18,7 @@ const command = args[0];
 const effectiveCommand = command === 'doctor' ? 'status' : command;
 const jsonOutput = args.includes('--json');
 const CLI_VERSION = '0.1.0';
-const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window', '--no-auto-pair', '--double', '--clear', '--submit', '--into-view', '--diff', '--from-exact', '--to-exact']);
+const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window', '--no-auto-pair', '--double', '--clear', '--submit', '--into-view', '--diff', '--from-exact', '--to-exact', '--dither']);
 const DOM_FORMATS = new Set(['interactive', 'summary', 'clean_html', 'json', 'html']);
 const KNOWN_FLAGS = new Set([
   '--session', '-s', '--json', '--help', '-h', '--selector', '--role', '--name', '--label',
@@ -28,6 +28,7 @@ const KNOWN_FLAGS = new Set([
   '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
   '--url-glob', '--wait-navigation',
   '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window', '--no-auto-pair',
+  '--fps', '--step', '--max-width', '--settle-ms', '--loop', '--max-frames', '--dither',
   '--direction', '--amount', '--delta-x', '--delta-y', '--into-view', '--duration-ms', '--diff',
   '--button', '--double', '--modifier', '--offset-x', '--offset-y', '--hold-ms', '--at', '--x', '--y',
   '--clear', '--submit', '--screenshot', '--intent', '--values',
@@ -212,6 +213,7 @@ function validateFlags() {
     dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit', '--diff', '--screenshot', '--output'],
     screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
     scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window'],
+    scrollgif: ['--output', '--selector', '--fps', '--step', '--duration-ms', '--max-width', '--settle-ms', '--hold-ms', '--loop', '--max-frames', '--dither', '--dedicated-window', '--wait-for-active'],
     click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout', '--button', '--double', '--modifier', '--offset-x', '--offset-y', '--hold-ms', '--at', '--x', '--y', '--screenshot', '--intent'],
     press: [...locator, ...within, '--key', '--nth', '--screenshot', '--intent'],
     fill: [...locator, ...within, '--value', '--nth', '--screenshot', '--intent'],
@@ -364,6 +366,26 @@ function browserCommand(pairing: boolean): Command {
         maxDuration: numberValue('--max-duration'),
         dedicatedWindow: args.includes('--dedicated-window'),
       };
+    case 'scrollgif': {
+      const selector = value('--selector');
+      if (args.includes('--full-page')) throw new Error('scrollgif does not accept --full-page');
+      return {
+        type: 'scrollgif',
+        session,
+        selector,
+        fps: numberValue('--fps'),
+        step: numberValue('--step'),
+        duration: numberValue('--duration-ms'),
+        maxWidth: numberValue('--max-width'),
+        settleMs: numberValue('--settle-ms'),
+        holdMs: numberValue('--hold-ms'),
+        loop: numberValue('--loop'),
+        maxFrames: numberValue('--max-frames'),
+        dither: args.includes('--dither') || undefined,
+        dedicatedWindow: args.includes('--dedicated-window'),
+        waitForActive: numberValue('--wait-for-active'),
+      };
+    }
     case 'click':
       return {
         type: 'click', session, locator: commandLocator(), within: withinLocator(), nth: numberValue('--nth'),
@@ -495,6 +517,7 @@ function usage(topic?: string) {
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
     screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
     scrape: `usage: ${invocation} scrape [URL] [--output FILE.zip] [--max-routes N] [--max-bytes N] [--max-duration MS] [--timeout MS] [--dedicated-window] [--session ID] [--json]\n\nCaptures same-origin routes as rendered MHTML plus one full-page stitched PNG per route. --dedicated-window moves only the paired tab into a new non-focused window so it remains active there. Defaults: 20 routes, 50 MB, and 120 seconds; hard limits: 50 routes, 100 MB, and 10 minutes.`,
+    scrollgif: `usage: ${invocation} scrollgif [--output FILE.gif] [--fps N] (--step PX | --duration-ms MS) [--selector CSS] [--max-width N] [--settle-ms MS] [--hold-ms MS] [--loop N] [--max-frames N] [--dither] [--dedicated-window] [--wait-for-active MS] [--session ID] [--json]\n\nRecords the paired tab scrolling smoothly from top to bottom and saves an animated GIF. Every frame scrolls a small step, waits for the paint to settle, and is captured, so output is smooth rather than fast. The scroll eases in with light acceleration capped at +30% of base speed, and the first and last frames hold for a pause at the top and bottom. Defaults: fps 25, step = viewport height / 32 (min 12px), --max-width 1200 (0 disables downscaling), --settle-ms 60, --hold-ms 800, loop forever, no dithering (--dither enables Floyd–Steinberg dithering for photo-heavy pages). --duration-ms sets the animation length instead of the step. --selector records a scrollable container instead of the page. Use --dedicated-window when the paired tab cannot stay active. Example: ${invocation} scrollgif --output article.gif --fps 25`,
     start: `usage: ${invocation} start [--name NAME] [--adapter ID] [--json]`,
     status: `usage: ${invocation} status [--json]\n       ${invocation} doctor [--json]`,
     list: `usage: ${invocation} list [--json]`,
@@ -522,6 +545,7 @@ Commands:
   wait             Wait for a locator or URL
   evaluate         Evaluate page-world JavaScript
   screenshot       Save a viewport, full-page, or element image
+  scrollgif        Record a smooth top-to-bottom scroll as an animated GIF
   scrape           Capture same-origin routes into a ZIP
   list             List sessions
   start            Explicitly create or reconnect a session
@@ -558,11 +582,11 @@ async function main() {
     !value('--session', '-s') &&
     (request.type === 'start'
       ? !request.adapter
-      : ['navigate', 'dom', 'screenshot', 'scrape', 'click', 'fill', 'type', 'select', 'press', 'scroll', 'bounds', 'highlight', 'drag', 'activate', 'wait', 'evaluate'].includes(request.type));
+      : ['navigate', 'dom', 'screenshot', 'scrape', 'scrollgif', 'click', 'fill', 'type', 'select', 'press', 'scroll', 'bounds', 'highlight', 'drag', 'activate', 'wait', 'evaluate'].includes(request.type));
   const autoStart =
     pairing ||
     effectiveCommand === 'start' ||
-    ['navigate', 'dom', 'screenshot', 'scrape', 'click', 'fill', 'type', 'select', 'press', 'wait', 'evaluate'].includes(
+    ['navigate', 'dom', 'screenshot', 'scrape', 'scrollgif', 'click', 'fill', 'type', 'select', 'press', 'wait', 'evaluate'].includes(
       effectiveCommand,
     );
   let ws: WebSocket;
@@ -585,6 +609,8 @@ async function main() {
     console.error(
       `Capturing up to ${request.maxRoutes ?? 20} routes for up to ${Math.round((request.maxDuration ?? 120_000) / 1000)} seconds…`,
     );
+  if (request.type === 'scrollgif')
+    console.error('Recording a smooth scroll animation; this is slow by design…');
   ws.send(JSON.stringify({ version: PROTOCOL_VERSION, id, kind: 'command', command: request }));
   await new Promise<void>((resolve, reject) => {
     let pair: any;
@@ -603,6 +629,8 @@ async function main() {
           ? request.waitForActive + 125_000
           : request.type === 'scrape'
             ? (request.maxDuration ?? 120_000) + 90_000
+          : request.type === 'scrollgif'
+            ? 900_000
         : 15_000;
     const timeoutMs = commandTimeoutMs + (recoverableCommand ? 305_000 : 0);
     const timer = setTimeout(() => reject(new Error('command timed out waiting for supervisor')), timeoutMs);
@@ -738,6 +766,25 @@ async function main() {
           const bytes = Buffer.from(message.result.data, 'base64');
           writeFileSync(output, bytes);
           printResult('screenshot', { action: 'screenshot-saved', output, bytes: bytes.length });
+        } else if (command === 'scrollgif') {
+          const output = value('--output') ?? 'page-scroll.gif';
+          const result = message.result;
+          if (!result || result.mimeType !== 'image/gif')
+            return finish(new Error(`unexpected scrollgif result type: ${result?.mimeType ?? 'missing'}`));
+          if (typeof result.chunks !== 'number' || result.chunks !== artifactChunks.length)
+            return finish(new Error('incomplete scrollgif transfer'));
+          const archive = Buffer.concat(artifactChunks);
+          writeFileSync(output, archive);
+          printResult('scrollgif', {
+            action: 'scrollgif-saved',
+            output,
+            bytes: archive.length,
+            frames: result.frames,
+            width: result.width,
+            height: result.height,
+            pixelsScrolled: result.pixelsScrolled,
+            durationMs: result.durationMs,
+          });
         } else if (command === 'scrape') {
           const output = value('--output') ?? 'page-scrape.zip';
           const result = message.result;
@@ -842,6 +889,7 @@ function printResult(kind: string, result: any) {
     close: `Closed session ${result.session}.`,
     screenshot: `Saved screenshot to ${result.output} (${result.bytes} bytes).`,
     scrape: `Saved ${result.routes} routes to ${result.output} (${result.bytes} bytes).`,
+    scrollgif: `Saved ${result.frames} frames to ${result.output} (${result.bytes} bytes, ${result.width}×${result.height}, ${(result.durationMs / 1000).toFixed(1)}s).`,
     'dom-file': `Saved ${result.format} DOM to ${result.output} (${result.bytes} bytes).`,
     'extension pair': `Paired. Control session: ${result.id}`,
   };
