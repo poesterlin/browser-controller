@@ -1232,7 +1232,7 @@ async function recordScroll(tabId, message) {
     }
   }
 
-  const stepPx = message.step ?? Math.max(12, Math.round(metrics.viewportHeight / 32));
+  const stepPx = message.step ?? Math.max(8, Math.round(metrics.viewportHeight / 48));
   let positions;
   if (total <= 0) {
     positions = [0];

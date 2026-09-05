@@ -31,17 +31,27 @@ describe('extension scroll easing', () => {
     // The cap holds: no frame advances more than 30% above base speed.
     expect(maxDelta).toBeLessThanOrEqual(base * 1.3 + 1);
     expect(maxDelta).toBeGreaterThan(base * 1.2);
-    // It really accelerates: late deltas are clearly larger than early ones.
-    expect(deltas[deltas.length - 2]).toBeGreaterThan(deltas[1] * 1.4);
+    // The cap is reached mid-scroll; the ends sit at 70% of base speed.
+    expect(deltas[Math.floor(deltas.length / 2)]).toBeGreaterThan(
+      deltas[deltas.length - 2] * 1.5,
+    );
   });
 
-  test('ends at full speed so the hold frame creates the bottom pause', () => {
+  test('decelerates symmetric to the start and glides into the bottom pause', () => {
     const total = 100_000;
     const frames = 400;
     const positions = easedScrollPositions(total, frames);
     const delta = (index: number) => positions[index + 1] - positions[index];
-    // Late deltas sit at the cap; the pause itself is the held final frame.
-    expect(delta(positions.length - 3)).toBeGreaterThan((total / frames) * 1.2);
+    const first = delta(1);
+    const last = delta(positions.length - 2);
+    const capDelta = (total / frames) * 1.3;
+    // Ends near the start speed (symmetric), well below the cap.
+    expect(last).toBeGreaterThan(first * 0.75);
+    expect(last).toBeLessThan(first * 1.35);
+    expect(last).toBeLessThan(capDelta * 0.75);
+    // The cap is still reached in the middle.
+    expect(Math.max(...Array.from({ length: positions.length - 1 }, (_, i) => delta(i))))
+      .toBeGreaterThan(capDelta * 0.9);
   });
 
   test('falls back to uniform spacing for short animations', () => {
