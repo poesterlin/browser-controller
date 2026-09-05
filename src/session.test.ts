@@ -7,7 +7,7 @@ const fake = (): BrowserSession => ({
   navigate: async () => {},
     screenshot: async () => ({ data: '', mimeType: 'image/png', width: 0, height: 0 }),
     scrape: async () => ({ mimeType: 'application/zip', url: '', title: null, capturedAt: '', bytes: 0, capturedBytes: 0, routes: 0 }),
-    scrollgif: async () => ({ mimeType: 'image/gif', width: 0, height: 0, frames: 0, pixelsScrolled: 0, durationMs: 0, bytes: 0 }),
+    scrollgif: async () => ({ mimeType: 'image/gif', format: 'gif', width: 0, height: 0, fps: 25, frames: 0, pixelsScrolled: 0, durationMs: 0, bytes: 0 }),
   dom: async () => ({ format: 'clean_html', html: '' }),
   click: async () => {},
   press: async () => {},

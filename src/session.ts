@@ -23,6 +23,7 @@ export interface ScrapeOptions {
 }
 export interface ScrollGifOptions {
   selector?: string;
+  format?: 'gif' | 'video';
   fps?: number;
   step?: number;
   duration?: number;

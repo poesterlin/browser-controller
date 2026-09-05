@@ -110,17 +110,36 @@ async function page(tabId, message) {
       }
       if (m.type === 'scrollgif_scroll') {
         let scrolled;
+        let target;
         if (m.selector) {
           const el = document.querySelector(m.selector);
           if (!el) return 'element_not_found';
           el.scrollTo({ left: m.x, top: m.y, behavior: 'instant' });
           scrolled = { x: el.scrollLeft, y: el.scrollTop };
+          target = el;
         } else {
           scrollTo({ left: m.x, top: m.y, behavior: 'instant' });
           scrolled = { x: scrollX, y: scrollY };
         }
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        return scrolled;
+        // Give lazy-loaded viewport images a bounded chance to finish before
+        // the frame is captured.
+        if (m.settleMs) {
+          const deadline = performance.now() + m.settleMs;
+          const pendingImages = () => [...document.images].filter((img) => {
+            const rect = img.getBoundingClientRect();
+            return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth && !img.complete;
+          });
+          while (performance.now() < deadline && pendingImages().length)
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        const root = document.scrollingElement ?? document.documentElement;
+        return {
+          ...scrolled,
+          maxScrollY: target
+            ? Math.max(0, target.scrollHeight - target.clientHeight)
+            : Math.max(0, root.scrollHeight - innerHeight),
+        };
       }
       if (m.type === 'screenshot_sticky') {
         const key = '__browserControllerStickyRestore';
@@ -1135,7 +1154,17 @@ async function recordScroll(tabId, message) {
   let controlTab = await chrome.tabs.get(tabId);
   let [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
   if (active?.id !== tabId && message.dedicatedWindow) {
-    const isolated = await chrome.windows.create({ tabId, focused: false });
+    // Match the original window's geometry: a different viewport size renders
+    // a different responsive theme, which would look wrong in the recording.
+    const originalWindow = await chrome.windows.get(controlTab.windowId);
+    const isolated = await chrome.windows.create({
+      tabId,
+      focused: false,
+      width: originalWindow.width,
+      height: originalWindow.height,
+      top: originalWindow.top,
+      left: originalWindow.left,
+    });
     if (!isolated?.id) throw new Error('dedicated_window_failed');
     controlTab = await chrome.tabs.get(tabId);
     [active] = await chrome.tabs.query({ active: true, windowId: controlTab.windowId });
@@ -1157,14 +1186,15 @@ async function recordScroll(tabId, message) {
   const metrics = measureResponse?.result;
   if (!metrics?.mode) throw new Error('scrollgif_measure_unavailable');
 
-  const total = metrics.maxScrollY;
+  const video = message.format === 'video';
   const fps = message.fps ?? 25;
   const maxFrames = message.maxFrames ?? 2500;
-  const settleMs = Math.max(0, Math.round(message.settleMs ?? 60));
+  const settleMs = Math.max(0, Math.round(message.settleMs ?? 100));
   const holdMs = Math.max(0, Math.round(message.holdMs ?? 800));
   const holdDelay = Math.max(1, Math.round(holdMs / 10));
   const original = { x: metrics.scroll.x, y: metrics.scroll.y };
-  const scrollTo = (y) => page(tabId, { type: 'scrollgif_scroll', selector, x: original.x, y });
+  const scrollTo = (y) =>
+    page(tabId, { type: 'scrollgif_scroll', selector, x: original.x, y, settleMs });
 
   const scroll = async (y) => {
     const response = (await scrollTo(y))[0];
@@ -1173,17 +1203,44 @@ async function recordScroll(tabId, message) {
     return response?.result;
   };
 
-  let positions = [];
+  // Lazy-loaded content grows the page while scrolling, so the bottom must be
+  // discovered by scrolling it once before frame positions are computed.
+  let total = metrics.maxScrollY;
+  {
+    const probeStep = Math.max(1, Math.round(metrics.viewportHeight * 0.9));
+    const measure = async () => {
+      const response = (await page(tabId, { type: 'scrollgif_measure', selector }))[0];
+      if (response?.error)
+        throw new Error(`page_world_error: ${response.error.message ?? String(response.error)}`);
+      return response?.result;
+    };
+    const started = Date.now();
+    let y = 0;
+    for (let guard = 0; guard < 5000 && Date.now() - started < 30_000; guard += 1) {
+      const response = await scroll(y);
+      const actual = response?.y ?? 0;
+      const max = response?.maxScrollY ?? 0;
+      if (actual >= max) {
+        const fresh = await measure();
+        if (!fresh || actual >= fresh.maxScrollY) {
+          total = fresh?.maxScrollY ?? max;
+          break;
+        }
+      }
+      y = Math.min(max, actual + probeStep);
+      total = Math.max(total, max);
+    }
+  }
+
+  const stepPx = message.step ?? Math.max(12, Math.round(metrics.viewportHeight / 32));
+  let positions;
   if (total <= 0) {
     positions = [0];
   } else {
-    let frameCount;
-    if (message.duration != null)
-      frameCount = Math.max(1, Math.round((message.duration * fps) / 1000));
-    else {
-      const step = message.step ?? Math.max(12, Math.round(metrics.viewportHeight / 32));
-      frameCount = Math.max(1, Math.ceil(total / step));
-    }
+    const frameCount =
+      message.duration != null
+        ? Math.max(1, Math.round((message.duration * fps) / 1000))
+        : Math.max(1, Math.ceil(total / stepPx));
     positions = easedScrollPositions(total, frameCount);
   }
   if (positions[positions.length - 1] !== total) positions.push(total);
@@ -1197,49 +1254,105 @@ async function recordScroll(tabId, message) {
   // has no such quota and captures the same visible surface.
   let encoder;
   let context;
+  let videoFrames;
   let frames = 0;
+  const holdCount = Math.max(1, Math.round((holdMs * fps) / 1000));
   await withDebugger(tabId, async (send) => {
     const capture = async () => {
       const shot = await send('Page.captureScreenshot', { format: 'png' });
       return createImageBitmap(await (await fetch(`data:image/png;base64,${shot.data}`)).blob());
     };
-    try {
-      await scroll(0);
-      if (settleMs) await new Promise((resolve) => setTimeout(resolve, settleMs));
-      for (let index = 0; index < positions.length; index += 1) {
-        if (index > 0) {
-          await scroll(positions[index]);
-          if (settleMs) await new Promise((resolve) => setTimeout(resolve, settleMs));
-        }
-        const bitmap = await capture();
-        if (!encoder) {
-          // Output dimensions are fixed once from the first capture so that a
-          // later size change (e.g. a scrollbar appearing) only rescales the
-          // frame instead of mismatching the encoder.
-          const maxWidth = message.maxWidth ?? 1200;
-          const width = !maxWidth || bitmap.width <= maxWidth ? bitmap.width : maxWidth;
-          const height = Math.max(1, Math.round((bitmap.height * width) / bitmap.width));
-          encoder = new GifEncoder({ width, height, fps, loop: message.loop ?? 0 });
-          const canvas = new OffscreenCanvas(width, height);
-          context = canvas.getContext('2d', { willReadFrequently: true });
-        }
-        context.drawImage(bitmap, 0, 0, encoder.width, encoder.height);
-        bitmap.close();
-        const hold = index === 0 || index === positions.length - 1 ? holdDelay : undefined;
-        encoder.addFrame(context.getImageData(0, 0, encoder.width, encoder.height).data, hold);
+    const emit = async (bitmap, hold) => {
+      if (!context) {
+        // Output dimensions are fixed once from the first capture so that a
+        // later size change (e.g. a scrollbar appearing) only rescales the
+        // frame instead of mismatching the encoder.
+        const maxWidth = message.maxWidth ?? 1200;
+        const width = !maxWidth || bitmap.width <= maxWidth ? bitmap.width : maxWidth;
+        const height = Math.max(1, Math.round((bitmap.height * width) / bitmap.width));
+        const canvas = new OffscreenCanvas(width, height);
+        context = canvas.getContext('2d', { willReadFrequently: true });
+        if (video) videoFrames = [];
+        else encoder = new GifEncoder({ width, height, fps, loop: message.loop ?? 0, dither: !!message.dither });
+      }
+      context.drawImage(bitmap, 0, 0, context.canvas.width, context.canvas.height);
+      bitmap.close();
+      if (video) {
+        const blob = await context.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const copies = hold ? holdCount : 1;
+        for (let copy = 0; copy < copies; copy += 1) videoFrames.push(bytes);
+        frames += copies;
+      } else {
+        encoder.addFrame(context.getImageData(0, 0, encoder.width, encoder.height).data, hold ? holdDelay : undefined);
         frames += 1;
       }
+    };
+    const captureAt = async (y, hold) => {
+      const response = await scroll(y);
+      if (settleMs) await new Promise((resolve) => setTimeout(resolve, settleMs));
+      await emit(await capture(), hold);
+      return response;
+    };
+    try {
+      let lastResponse = await captureAt(positions[0], true);
+      for (let index = 1; index < positions.length; index += 1)
+        lastResponse = await captureAt(positions[index], index === positions.length - 1);
+      // Content that loaded during capture can grow the page; keep recording
+      // uniform steps until the scroll truly reaches the bottom.
+      let tail = 0;
+      for (;;) {
+        const actual = lastResponse?.y ?? 0;
+        const max = lastResponse?.maxScrollY ?? 0;
+        if (actual < max) {
+          lastResponse = await captureAt(Math.min(max, actual + stepPx), false);
+          tail += 1;
+          continue;
+        }
+        const fresh = (await page(tabId, { type: 'scrollgif_measure', selector }))[0]?.result;
+        if (!fresh || actual >= fresh.maxScrollY) break;
+        lastResponse = { ...lastResponse, maxScrollY: fresh.maxScrollY };
+      }
+      // Tail frames play at base speed; give the true bottom frame the pause.
+      if (tail > 0) lastResponse = await captureAt(lastResponse?.y ?? 0, true);
     } finally {
       await scroll(original.y).catch(() => {});
     }
   });
+  if (video) {
+    let bytes = 0;
+    for (const frame of videoFrames) bytes += 4 + frame.length;
+    const archive = new Uint8Array(bytes);
+    const view = new DataView(archive.buffer);
+    let offset = 0;
+    for (const frame of videoFrames) {
+      view.setUint32(offset, frame.length, true);
+      offset += 4;
+      archive.set(frame, offset);
+      offset += frame.length;
+    }
+    return {
+      archive,
+      mimeType: 'video/jpeg-sequence',
+      format: 'video',
+      width: context.canvas.width,
+      height: context.canvas.height,
+      fps,
+      frames,
+      pixelsScrolled: total,
+      durationMs: Math.round((frames * 1000) / fps),
+      bytes: archive.length,
+    };
+  }
   const archive = encoder.finish();
   const holdExtra = positions.length >= 2 ? 2 * Math.max(0, holdDelay - encoder.delay) : 0;
   return {
     archive,
     mimeType: 'image/gif',
+    format: 'gif',
     width: encoder.width,
     height: encoder.height,
+    fps,
     frames,
     pixelsScrolled: total,
     durationMs: frames * encoder.delay * 10 + holdExtra * 10,

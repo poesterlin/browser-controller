@@ -382,6 +382,7 @@ export class Supervisor {
           case 'scrollgif':
             return s.adapter.scrollgif({
               selector: c.selector,
+              format: c.format,
               fps: c.fps,
               step: c.step,
               duration: c.duration,

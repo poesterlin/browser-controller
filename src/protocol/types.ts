@@ -44,6 +44,7 @@ export type Command =
       type: 'scrollgif';
       session: string;
       selector?: string;
+      format?: 'gif' | 'video';
       fps?: number;
       step?: number;
       duration?: number;
@@ -236,10 +237,12 @@ export interface ScrapeResult {
   chunks?: string[];
 }
 export interface ScrollGifResult {
-  mimeType: 'image/gif';
+  mimeType: 'image/gif' | 'video/jpeg-sequence';
+  format: 'gif' | 'video';
   url?: string;
   width: number;
   height: number;
+  fps: number;
   frames: number;
   pixelsScrolled: number;
   durationMs: number;

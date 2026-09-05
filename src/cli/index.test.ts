@@ -395,6 +395,8 @@ describe('CLI transport', () => {
       result: {
         action: 'scrollgif-saved',
         output,
+        container: 'gif',
+        encoder: 'gif89a',
         bytes: gif.length,
         frames: 42,
         width: 1200,
@@ -471,7 +473,7 @@ describe('CLI transport', () => {
       { type: 'scroll', session: 'last', locator: { by: 'text', value: 'More', exact: false }, intoView: true },
       { type: 'type', session: 'last', locator: { by: 'label', value: 'Search', exact: false }, text: 'kebap', delay: 25, clear: true, submit: true },
       { type: 'click', session: 'last', button: 'right', x: 120, y: 240 },
-      { type: 'scrollgif', session: 'last', selector: '.feed', fps: 25, step: 40, dedicatedWindow: false },
+      { type: 'scrollgif', session: 'last', selector: '.feed', format: 'video', fps: 25, step: 40, dedicatedWindow: false },
     ]);
   });
 });

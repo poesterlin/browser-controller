@@ -187,7 +187,7 @@ function validateFields(c: RecordInput, type: CommandType): FailureResult | unde
     const result = rangeFailure(c, rule);
     if (result) return result;
   }
-  if (c.format !== undefined && !DOM_FORMATS.has(String(c.format)))
+  if (type === 'dom' && c.format !== undefined && !DOM_FORMATS.has(String(c.format)))
     return {
       ok: false,
       code: 'invalid_request',
@@ -226,6 +226,8 @@ function validateFields(c: RecordInput, type: CommandType): FailureResult | unde
     if (!locator(c.locator) && (c.within !== undefined || c.nth !== undefined))
       return { ok: false, code: 'invalid_request', message: 'page scroll does not accept locator options' };
   }
+  if (type === 'scrollgif' && c.format !== undefined && !['gif', 'video'].includes(String(c.format)))
+    return { ok: false, code: 'invalid_request', message: 'format must be gif or video' };
   if (type === 'scrollgif' && c.step !== undefined && c.duration !== undefined)
     return { ok: false, code: 'invalid_request', message: 'scrollgif accepts step or duration, not both' };
   if (type === 'select') {

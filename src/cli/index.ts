@@ -12,6 +12,7 @@ import {
   type Discovery,
 } from '../supervisor/discovery.js';
 import { PROTOCOL_VERSION, type Command, type Locator } from '../protocol/index.js';
+import { parseJpegSequence, writeVideo } from '../video.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -213,7 +214,7 @@ function validateFlags() {
     dom: [...locator, ...within, '--max-chars', '--format', '--text-chars', '--depth', '--offset', '--limit', '--nth', '--item-limit', '--diff', '--screenshot', '--output'],
     screenshot: ['--output', '--selector', '--full-page', '--wait-for-active'],
     scrape: ['--url', '--output', '--timeout', '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window'],
-    scrollgif: ['--output', '--selector', '--fps', '--step', '--duration-ms', '--max-width', '--settle-ms', '--hold-ms', '--loop', '--max-frames', '--dither', '--dedicated-window', '--wait-for-active'],
+    scrollgif: ['--output', '--selector', '--format', '--fps', '--step', '--duration-ms', '--max-width', '--settle-ms', '--hold-ms', '--loop', '--max-frames', '--dither', '--dedicated-window', '--wait-for-active'],
     click: [...locator, ...within, '--nth', '--wait-navigation', '--timeout', '--button', '--double', '--modifier', '--offset-x', '--offset-y', '--hold-ms', '--at', '--x', '--y', '--screenshot', '--intent'],
     press: [...locator, ...within, '--key', '--nth', '--screenshot', '--intent'],
     fill: [...locator, ...within, '--value', '--nth', '--screenshot', '--intent'],
@@ -369,10 +370,14 @@ function browserCommand(pairing: boolean): Command {
     case 'scrollgif': {
       const selector = value('--selector');
       if (args.includes('--full-page')) throw new Error('scrollgif does not accept --full-page');
+      const format = value('--format') ?? (value('--output')?.endsWith('.gif') ? 'gif' : 'video');
+      if (format !== 'gif' && format !== 'video')
+        throw new Error('scrollgif --format must be gif or video');
       return {
         type: 'scrollgif',
         session,
         selector,
+        format,
         fps: numberValue('--fps'),
         step: numberValue('--step'),
         duration: numberValue('--duration-ms'),
@@ -517,7 +522,7 @@ function usage(topic?: string) {
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
     screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
     scrape: `usage: ${invocation} scrape [URL] [--output FILE.zip] [--max-routes N] [--max-bytes N] [--max-duration MS] [--timeout MS] [--dedicated-window] [--session ID] [--json]\n\nCaptures same-origin routes as rendered MHTML plus one full-page stitched PNG per route. --dedicated-window moves only the paired tab into a new non-focused window so it remains active there. Defaults: 20 routes, 50 MB, and 120 seconds; hard limits: 50 routes, 100 MB, and 10 minutes.`,
-    scrollgif: `usage: ${invocation} scrollgif [--output FILE.gif] [--fps N] (--step PX | --duration-ms MS) [--selector CSS] [--max-width N] [--settle-ms MS] [--hold-ms MS] [--loop N] [--max-frames N] [--dither] [--dedicated-window] [--wait-for-active MS] [--session ID] [--json]\n\nRecords the paired tab scrolling smoothly from top to bottom and saves an animated GIF. Every frame scrolls a small step, waits for the paint to settle, and is captured, so output is smooth rather than fast. The scroll eases in with light acceleration capped at +30% of base speed, and the first and last frames hold for a pause at the top and bottom. Defaults: fps 25, step = viewport height / 32 (min 12px), --max-width 1200 (0 disables downscaling), --settle-ms 60, --hold-ms 800, loop forever, no dithering (--dither enables Floyd–Steinberg dithering for photo-heavy pages). --duration-ms sets the animation length instead of the step. --selector records a scrollable container instead of the page. Use --dedicated-window when the paired tab cannot stay active. Example: ${invocation} scrollgif --output article.gif --fps 25`,
+    scrollgif: `usage: ${invocation} scrollgif [--output FILE] [--format gif|video] [--fps N] (--step PX | --duration-ms MS) [--selector CSS] [--max-width N] [--settle-ms MS] [--hold-ms MS] [--loop N] [--max-frames N] [--dither] [--dedicated-window] [--wait-for-active MS] [--session ID] [--json]\n\nRecords the paired tab scrolling smoothly from top to bottom. By default the frames are full-color JPEGs converted into a video in this CLI (MP4 via ffmpeg when available, otherwise a motion-JPEG AVI); --format gif encodes an animated GIF with per-frame median-cut palettes instead. Every frame scrolls a small step, waits for the paint (and viewport images) to settle, and is captured before the next step, so output is smooth rather than fast. The bottom is re-measured while scrolling, so lazy-loaded content that grows the page is still recorded to the end. The scroll eases in with light acceleration capped at +30% of base speed, and the first and last frames hold for a pause at the top and bottom. Defaults: fps 25, step = viewport height / 32 (min 12px), --max-width 1200 (0 disables downscaling), --settle-ms 100, --hold-ms 800, loop forever (gif), no dithering (--dither enables Floyd–Steinberg dithering for gif photos). --duration-ms sets the animation length instead of the step. --selector records a scrollable container instead of the page. Use --dedicated-window when the paired tab cannot stay active; the dedicated window keeps the original window's size. Example: ${invocation} scrollgif --output article.mp4 --fps 25`,
     start: `usage: ${invocation} start [--name NAME] [--adapter ID] [--json]`,
     status: `usage: ${invocation} status [--json]\n       ${invocation} doctor [--json]`,
     list: `usage: ${invocation} list [--json]`,
@@ -545,7 +550,7 @@ Commands:
   wait             Wait for a locator or URL
   evaluate         Evaluate page-world JavaScript
   screenshot       Save a viewport, full-page, or element image
-  scrollgif        Record a smooth top-to-bottom scroll as an animated GIF
+  scrollgif        Record a smooth top-to-bottom scroll as a video or GIF
   scrape           Capture same-origin routes into a ZIP
   list             List sessions
   start            Explicitly create or reconnect a session
@@ -640,7 +645,7 @@ async function main() {
       if (error) reject(error);
       else resolve();
     };
-    ws.on('message', (raw) => {
+    ws.on('message', async (raw) => {
       const message = JSON.parse(raw.toString());
       if (!recovering && message.id === activeId && message.event === 'artifact_chunk') {
         if (message.index !== artifactChunks.length || typeof message.data !== 'string')
@@ -767,24 +772,61 @@ async function main() {
           writeFileSync(output, bytes);
           printResult('screenshot', { action: 'screenshot-saved', output, bytes: bytes.length });
         } else if (command === 'scrollgif') {
-          const output = value('--output') ?? 'page-scroll.gif';
           const result = message.result;
-          if (!result || result.mimeType !== 'image/gif')
-            return finish(new Error(`unexpected scrollgif result type: ${result?.mimeType ?? 'missing'}`));
+          if (!result) return finish(new Error('unexpected scrollgif result: missing'));
+          const output =
+            value('--output') ?? (result.format === 'gif' ? 'page-scroll.gif' : 'page-scroll.mp4');
           if (typeof result.chunks !== 'number' || result.chunks !== artifactChunks.length)
             return finish(new Error('incomplete scrollgif transfer'));
-          const archive = Buffer.concat(artifactChunks);
-          writeFileSync(output, archive);
-          printResult('scrollgif', {
-            action: 'scrollgif-saved',
-            output,
-            bytes: archive.length,
-            frames: result.frames,
-            width: result.width,
-            height: result.height,
-            pixelsScrolled: result.pixelsScrolled,
-            durationMs: result.durationMs,
-          });
+          const transfer = Buffer.concat(artifactChunks);
+          if (result.mimeType === 'image/gif') {
+            writeFileSync(output, transfer);
+            printResult('scrollgif', {
+              action: 'scrollgif-saved',
+              output,
+              container: 'gif',
+              encoder: 'gif89a',
+              bytes: transfer.length,
+              frames: result.frames,
+              width: result.width,
+              height: result.height,
+              pixelsScrolled: result.pixelsScrolled,
+              durationMs: result.durationMs,
+            });
+            return finish();
+          }
+          if (result.mimeType !== 'video/jpeg-sequence')
+            return finish(new Error(`unexpected scrollgif result type: ${result.mimeType ?? 'missing'}`));
+          let frames;
+          try {
+            frames = parseJpegSequence(transfer);
+          } catch (error) {
+            return finish(new Error(`invalid scrollgif frame transfer: ${(error as Error).message}`));
+          }
+          if (frames.length !== result.frames)
+            return finish(new Error('incomplete scrollgif frame transfer'));
+          try {
+            const { bytes, container, encoder } = await writeVideo(output, frames, {
+              fps: result.fps,
+              width: result.width,
+              height: result.height,
+            });
+            printResult('scrollgif', {
+              action: 'scrollgif-saved',
+              output,
+              container,
+              encoder,
+              bytes,
+              frames: result.frames,
+              width: result.width,
+              height: result.height,
+              pixelsScrolled: result.pixelsScrolled,
+              durationMs: result.durationMs,
+            });
+          } catch (error) {
+            return finish(error as Error);
+          }
+          return finish();
         } else if (command === 'scrape') {
           const output = value('--output') ?? 'page-scrape.zip';
           const result = message.result;
@@ -889,7 +931,7 @@ function printResult(kind: string, result: any) {
     close: `Closed session ${result.session}.`,
     screenshot: `Saved screenshot to ${result.output} (${result.bytes} bytes).`,
     scrape: `Saved ${result.routes} routes to ${result.output} (${result.bytes} bytes).`,
-    scrollgif: `Saved ${result.frames} frames to ${result.output} (${result.bytes} bytes, ${result.width}×${result.height}, ${(result.durationMs / 1000).toFixed(1)}s).`,
+    scrollgif: `Saved ${result.frames} frames to ${result.output} (${result.container}, ${result.bytes} bytes, ${result.width}×${result.height}, ${(result.durationMs / 1000).toFixed(1)}s).`,
     'dom-file': `Saved ${result.format} DOM to ${result.output} (${result.bytes} bytes).`,
     'extension pair': `Paired. Control session: ${result.id}`,
   };
