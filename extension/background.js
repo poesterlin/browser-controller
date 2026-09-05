@@ -1256,6 +1256,7 @@ async function recordScroll(tabId, message) {
   let context;
   let videoFrames;
   let frames = 0;
+  let reached = total;
   const holdCount = Math.max(1, Math.round((holdMs * fps) / 1000));
   await withDebugger(tabId, async (send) => {
     const capture = async () => {
@@ -1297,24 +1298,24 @@ async function recordScroll(tabId, message) {
     try {
       let lastResponse = await captureAt(positions[0], true);
       for (let index = 1; index < positions.length; index += 1)
-        lastResponse = await captureAt(positions[index], index === positions.length - 1);
+        lastResponse = await captureAt(positions[index], false);
       // Content that loaded during capture can grow the page; keep recording
       // uniform steps until the scroll truly reaches the bottom.
-      let tail = 0;
       for (;;) {
         const actual = lastResponse?.y ?? 0;
         const max = lastResponse?.maxScrollY ?? 0;
         if (actual < max) {
           lastResponse = await captureAt(Math.min(max, actual + stepPx), false);
-          tail += 1;
           continue;
         }
         const fresh = (await page(tabId, { type: 'scrollgif_measure', selector }))[0]?.result;
         if (!fresh || actual >= fresh.maxScrollY) break;
         lastResponse = { ...lastResponse, maxScrollY: fresh.maxScrollY };
       }
-      // Tail frames play at base speed; give the true bottom frame the pause.
-      if (tail > 0) lastResponse = await captureAt(lastResponse?.y ?? 0, true);
+      // The true bottom always gets the pause; eased-final and tail frames
+      // play at base speed, so a growing page never freezes mid-video.
+      lastResponse = await captureAt(lastResponse?.y ?? 0, true);
+      reached = lastResponse?.y ?? reached;
     } finally {
       await scroll(original.y).catch(() => {});
     }
@@ -1339,7 +1340,7 @@ async function recordScroll(tabId, message) {
       height: context.canvas.height,
       fps,
       frames,
-      pixelsScrolled: total,
+      pixelsScrolled: reached,
       durationMs: Math.round((frames * 1000) / fps),
       bytes: archive.length,
     };
@@ -1354,7 +1355,7 @@ async function recordScroll(tabId, message) {
     height: encoder.height,
     fps,
     frames,
-    pixelsScrolled: total,
+    pixelsScrolled: reached,
     durationMs: frames * encoder.delay * 10 + holdExtra * 10,
     bytes: archive.length,
   };
