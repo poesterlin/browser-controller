@@ -15,6 +15,7 @@ export type Capability =
   | 'drag'
   | 'activate'
   | 'scrape.snapshot'
+  | 'device.emulation'
   | 'scrollgif.record'
   | 'screenshot.viewport'
   | 'screenshot.fullPage'
@@ -193,8 +194,15 @@ export type Command =
       intent?: string;
     }
   | { type: 'activate'; session: string }
-  | { type: 'evaluate'; session: string; expression: string }
-  | { type: 'close'; session: string; reason?: string };
+  | {
+      type: 'device';
+      session: string;
+      width?: number;
+      height?: number;
+      mobile?: boolean;
+      clear?: boolean;
+    }
+  | { type: 'evaluate'; session: string; expression: string }  | { type: 'close'; session: string; reason?: string };
 export interface Envelope {
   version: number;
   id: string;

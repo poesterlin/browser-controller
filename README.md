@@ -40,6 +40,8 @@ browserctl bounds LOCATOR
 browserctl highlight LOCATOR [--duration-ms 2000]
 browserctl drag --from-selector CSS (--to-selector CSS | --to-x N --to-y N)
 browserctl activate
+browserctl device 390x844 [--mobile]
+browserctl device --clear
 browserctl wait LOCATOR [--state visible|attached|hidden] [--timeout MS]
 browserctl wait --tab-active [--timeout MS]
 browserctl wait --url URL [--timeout MS]
@@ -76,6 +78,8 @@ browserctl drag --from-text Todo --to-text Done
 ```
 
 `highlight` temporarily outlines the unique match for human verification. `activate` may focus only the explicitly paired tab and its window; it cannot select another tab.
+
+`device WIDTHxHEIGHT [--mobile]` emulates a device viewport for every command on the session — pages render at the emulated size with working media queries (a real responsive viewport, not a scaled screenshot), so `screenshot --full-page`, `dom`, clicks, `scrollgif` recordings, and scrapes all operate at the chosen device size. `device --clear` restores the real viewport. Chrome keeps the emulation only while its debugger stays attached, so the extension holds that attachment until cleared, the session closes, or the infobar is dismissed. Width or height can be omitted to keep the current value in that dimension.
 
 Add `--screenshot FILE.png` to `click`, `fill`, `type`, `select`, `press`, `scroll`, `drag`, or `dom` to save a viewport screenshot in the same controller round-trip. Add `--intent TEXT` to mutations to preserve a human-readable reason in the structured result.
 

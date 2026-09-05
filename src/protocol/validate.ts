@@ -40,6 +40,7 @@ const COMMAND_TYPES = new Set<CommandType>([
   'highlight',
   'drag',
   'activate',
+  'device',
   'fill',
   'type',
   'wait',
@@ -70,6 +71,8 @@ const INTEGER_RANGES: Array<[(c: RecordInput) => unknown, number, number, string
   [(c) => c.settleMs, 0, 10_000, 'settleMs must be between 0 and 10000'],
   [(c) => c.loop, 0, 1_000, 'loop must be between 0 and 1000'],
   [(c) => c.maxFrames, 1, 10_000, 'maxFrames must be between 1 and 10000'],
+  [(c) => c.width, 50, 10_000, 'device width must be between 50 and 10000'],
+  [(c) => c.height, 50, 10_000, 'device height must be between 50 and 10000'],
   [(c) => c.amount, 1, 100_000, 'amount must be between 1 and 100000'],
   [(c) => c.holdMs, 0, 10_000, 'holdMs must be between 0 and 10000'],
   [(c) => c.duration, 100, 30_000, 'duration must be between 100 and 30000'],
@@ -111,6 +114,10 @@ function validateCommon(c: RecordInput, type: CommandType): FailureResult | unde
   for (const name of ['double', 'clear', 'submit', 'intoView', 'diff', 'screenshotAfter', 'dither'])
     if (c[name] !== undefined && typeof c[name] !== 'boolean')
       return { ok: false, code: 'invalid_request', message: `${name} must be a boolean` };
+  if (c.mobile !== undefined && typeof c.mobile !== 'boolean')
+    return { ok: false, code: 'invalid_request', message: 'mobile must be a boolean' };
+  if (type === 'device' && c.clear !== undefined && typeof c.clear !== 'boolean')
+    return { ok: false, code: 'invalid_request', message: 'clear must be a boolean' };
   if (c.intent !== undefined && !string(c.intent))
     return { ok: false, code: 'invalid_request', message: 'intent must be a string' };
   if (string(c.intent) && c.intent.length > 500)
@@ -225,6 +232,12 @@ function validateFields(c: RecordInput, type: CommandType): FailureResult | unde
     if (c.intoView === true && !locator(c.locator)) return { ok: false, code: 'invalid_request', message: 'intoView requires a locator' };
     if (!locator(c.locator) && (c.within !== undefined || c.nth !== undefined))
       return { ok: false, code: 'invalid_request', message: 'page scroll does not accept locator options' };
+  }
+  if (type === 'device') {
+    if (c.clear !== undefined && (c.width !== undefined || c.height !== undefined || c.mobile !== undefined))
+      return { ok: false, code: 'invalid_request', message: 'device clear does not accept size options' };
+    if (c.clear === undefined && c.width === undefined && c.height === undefined)
+      return { ok: false, code: 'invalid_request', message: 'device requires a size or --clear' };
   }
   if (type === 'scrollgif' && c.format !== undefined && !['gif', 'video'].includes(String(c.format)))
     return { ok: false, code: 'invalid_request', message: 'format must be gif or video' };

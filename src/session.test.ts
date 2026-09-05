@@ -19,6 +19,7 @@ const fake = (): BrowserSession => ({
   highlight: async () => ({}),
   drag: async () => ({}),
   activate: async () => ({}),
+  device: async () => ({ action: 'device-set', width: 390, height: 844, mobile: false }),
   wait: async () => ({}),
   evaluate: async () => ({ value: null }),
   close: async () => {},

@@ -274,6 +274,56 @@ describe('protocol validation', () => {
       }),
     ).toMatchObject({ code: 'invalid_request' });
   });
+  test('validates device emulation commands', () => {
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'device',
+        kind: 'command',
+        command: { type: 'device', session: 's', width: 390, height: 844, mobile: true },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'device-width-only',
+        kind: 'command',
+        command: { type: 'device', session: 's', width: 768 },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'device-clear',
+        kind: 'command',
+        command: { type: 'device', session: 's', clear: true },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'device-empty',
+        kind: 'command',
+        command: { type: 'device', session: 's' },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'device-clear-plus-size',
+        kind: 'command',
+        command: { type: 'device', session: 's', clear: true, width: 390, height: 844 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+    expect(
+      validateEnvelope({
+        version: 1,
+        id: 'device-small',
+        kind: 'command',
+        command: { type: 'device', session: 's', width: 20, height: 844 },
+      }),
+    ).toMatchObject({ code: 'invalid_request' });
+  });
   test('validates scrollgif capture options', () => {
     expect(
       validateEnvelope({

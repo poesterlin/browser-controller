@@ -19,7 +19,7 @@ const command = args[0];
 const effectiveCommand = command === 'doctor' ? 'status' : command;
 const jsonOutput = args.includes('--json');
 const CLI_VERSION = '0.1.0';
-const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window', '--no-auto-pair', '--double', '--clear', '--submit', '--into-view', '--diff', '--from-exact', '--to-exact', '--dither']);
+const BOOLEAN_FLAGS = new Set(['--json', '--help', '-h', '--exact', '--within-exact', '--full-page', '--changes', '--tab-active', '--window-focused', '--wait-navigation', '--dedicated-window', '--no-auto-pair', '--double', '--clear', '--submit', '--into-view', '--diff', '--from-exact', '--to-exact', '--dither', '--mobile']);
 const DOM_FORMATS = new Set(['interactive', 'summary', 'clean_html', 'json', 'html']);
 const KNOWN_FLAGS = new Set([
   '--session', '-s', '--json', '--help', '-h', '--selector', '--role', '--name', '--label',
@@ -29,7 +29,7 @@ const KNOWN_FLAGS = new Set([
   '--nth', '--item-limit', '--wait-for-active', '--tab-active', '--window-focused', '--option-text',
   '--url-glob', '--wait-navigation',
   '--max-bytes', '--max-routes', '--max-duration', '--dedicated-window', '--no-auto-pair',
-  '--fps', '--step', '--max-width', '--settle-ms', '--loop', '--max-frames', '--dither',
+  '--fps', '--step', '--max-width', '--settle-ms', '--loop', '--max-frames', '--dither', '--mobile',
   '--direction', '--amount', '--delta-x', '--delta-y', '--into-view', '--duration-ms', '--diff',
   '--button', '--double', '--modifier', '--offset-x', '--offset-y', '--hold-ms', '--at', '--x', '--y',
   '--clear', '--submit', '--screenshot', '--intent', '--values',
@@ -225,6 +225,7 @@ function validateFlags() {
     highlight: [...locator, ...within, '--nth', '--duration-ms'],
     drag: ['--from-selector', '--from-role', '--from-name', '--from-label', '--from-text', '--from-exact', '--from-nth', '--to-selector', '--to-role', '--to-name', '--to-label', '--to-text', '--to-exact', '--to-nth', '--to-x', '--to-y', '--screenshot', '--intent'],
     activate: [],
+    device: ['--mobile', '--clear'],
     wait: [...locator, ...within, '--url', '--url-glob', '--state', '--timeout', '--title', '--evaluate', '--count', '--value', '--changes', '--nth', '--tab-active', '--window-focused'],
     evaluate: ['--expression'],
     close: ['--reason'],
@@ -471,6 +472,18 @@ function browserCommand(pairing: boolean): Command {
     }
     case 'activate':
       return { type: 'activate', session };
+    case 'device': {
+      const clear = args.includes('--clear');
+      const size = args[1] && !args[1].startsWith('-') ? args[1] : undefined;
+      if (!clear && !size) throw new Error('device requires a size like 390x844 or --clear');
+      if (clear) return { type: 'device', session, clear: true };
+      const match = /^(\d{2,5})x(\d{2,5})$/.exec(size ?? '');
+      if (!match) throw new Error('device size must be WIDTHxHEIGHT, e.g. 390x844');
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      if (width < 50 || height < 50) throw new Error('device size must be at least 50x50');
+      return { type: 'device', session, width, height, mobile: args.includes('--mobile') || undefined };
+    }
     case 'wait':
       return {
         type: 'wait',
@@ -518,6 +531,7 @@ function usage(topic?: string) {
     highlight: `usage: ${invocation} highlight LOCATOR [--duration-ms 2000] [--json]\n\n${locator}`,
     drag: `usage: ${invocation} drag --from-(selector|role|label|text) VALUE (--to-(selector|role|label|text) VALUE | --to-x N --to-y N) [--screenshot FILE] [--json]`,
     activate: `usage: ${invocation} activate [--json]\n\nBrings only the explicitly paired tab and its window to the foreground.`,
+    device: `usage: ${invocation} device WIDTHxHEIGHT [--mobile] [--session ID] [--json]\n       ${invocation} device --clear [--session ID] [--json]\n\nEmulates a device viewport for every command on this session — navigate, dom, click, screenshot, scrollgif, and scrape all render at the emulated size with working media queries. Chrome keeps the emulated viewport only while its debugger stays attached, so the extension holds that attachment until 'device --clear', the session closes, or the infobar is dismissed. Example: ${invocation} device 390x844 --mobile`,
     wait: `usage: ${invocation} wait (LOCATOR | --url URL | --title TEXT | --evaluate EXPR) [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] [--session ID] [--json]\n\n${locator}\n\nLocator waits can require an exact match count, an exact field/text value, or a change from the value observed when waiting began. URL waits are exact; title matching is partial; evaluate expressions are polled until truthy.\n\nExamples:\n  ${invocation} wait --selector '.result' --count 3\n  ${invocation} wait --label Status --value Complete\n  ${invocation} wait --role log --changes\n  ${invocation} wait --evaluate "document.querySelectorAll('[class*=markdown]').length > 0" --timeout 20000`,
     evaluate: `usage: ${invocation} evaluate --expression JAVASCRIPT [--session ID] [--json]`,
     screenshot: `usage: ${invocation} screenshot [--full-page | --selector CSS] [--wait-for-active MS] [--output FILE.png] [--session ID] [--json]`,
@@ -547,6 +561,7 @@ Commands:
   highlight        Temporarily highlight an element
   drag             Drag to a locator or viewport coordinates
   activate         Focus only the paired tab and window
+  device           Emulate a device viewport for all commands (e.g. 390x844)
   wait             Wait for a locator or URL
   evaluate         Evaluate page-world JavaScript
   screenshot       Save a viewport, full-page, or element image
@@ -587,11 +602,11 @@ async function main() {
     !value('--session', '-s') &&
     (request.type === 'start'
       ? !request.adapter
-      : ['navigate', 'dom', 'screenshot', 'scrape', 'scrollgif', 'click', 'fill', 'type', 'select', 'press', 'scroll', 'bounds', 'highlight', 'drag', 'activate', 'wait', 'evaluate'].includes(request.type));
+      : ['navigate', 'dom', 'screenshot', 'scrape', 'scrollgif', 'device', 'click', 'fill', 'type', 'select', 'press', 'scroll', 'bounds', 'highlight', 'drag', 'activate', 'wait', 'evaluate'].includes(request.type));
   const autoStart =
     pairing ||
     effectiveCommand === 'start' ||
-    ['navigate', 'dom', 'screenshot', 'scrape', 'scrollgif', 'click', 'fill', 'type', 'select', 'press', 'wait', 'evaluate'].includes(
+    ['navigate', 'dom', 'screenshot', 'scrape', 'scrollgif', 'device', 'click', 'fill', 'type', 'select', 'press', 'wait', 'evaluate'].includes(
       effectiveCommand,
     );
   let ws: WebSocket;
@@ -927,6 +942,7 @@ function printResult(kind: string, result: any) {
     highlight: `Highlighted element for ${result.duration}ms.`,
     drag: `Dragged from ${result.from?.x},${result.from?.y} to ${result.to?.x},${result.to?.y}.`,
     activate: `Activated paired tab ${result.tabId}.`,
+    device: result.action === 'device-cleared' ? 'Device emulation cleared.' : `Device set to ${result.width}×${result.height}${result.mobile ? ' (mobile)' : ''}.`,
     wait: `Matched ${result.condition ?? 'condition'} after ${result.elapsedMs ?? 0}ms.`,
     close: `Closed session ${result.session}.`,
     screenshot: `Saved screenshot to ${result.output} (${result.bytes} bytes).`,

@@ -89,6 +89,7 @@ export interface BrowserSession {
   highlight(locator: Locator, within?: Locator, nth?: number, duration?: number): Promise<unknown>;
   drag(from: Locator, options: { to?: Locator; fromNth?: number; toNth?: number; toX?: number; toY?: number }): Promise<unknown>;
   activate(): Promise<unknown>;
+  device(options: { width?: number; height?: number; mobile?: boolean; clear?: boolean }): Promise<unknown>;
   wait(options: WaitOptions): Promise<unknown>;
   evaluate(expression: string): Promise<EvaluateResult>;
   close(reason: string): Promise<void>;

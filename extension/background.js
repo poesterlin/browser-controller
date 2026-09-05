@@ -15,7 +15,42 @@ const state = {
   controlTabId: null,
   pairingTabId: null,
   commands: new CommandCache(),
+  // Device emulation keeps the debugger attached for the whole session so the
+  // emulated viewport applies to every command until it is cleared. The
+  // shared attachment is reused by all debugger-based operations.
+  device: null,
+  debuggerTabId: null,
 };
+
+async function ensureDebuggerAttached(tabId) {
+  if (state.debuggerTabId === tabId) return;
+  await chrome.debugger.attach({ tabId }, '1.3');
+  state.debuggerTabId = tabId;
+}
+
+// Runs an operation with the Chrome debugger attached. A device-emulation
+// attachment is reused and never detached here, so the emulated viewport
+// survives individual commands.
+async function withDebugger(tabId, operation) {
+  const persistent = state.debuggerTabId === tabId;
+  if (!persistent) {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    state.debuggerTabId = tabId;
+  }
+  try {
+    return await operation((method, params) => chrome.debugger.sendCommand({ tabId }, method, params));
+  } finally {
+    if (!persistent) {
+      await chrome.debugger.detach({ tabId }).catch(() => {});
+      if (state.debuggerTabId === tabId) state.debuggerTabId = null;
+    }
+  }
+}
+
+function resetDeviceEmulation() {
+  state.device = null;
+  state.debuggerTabId = null;
+}
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message.type === 'pair') {
     const controlTabId = sender.tab?.id;
@@ -85,6 +120,9 @@ async function page(tabId, message) {
         scrollTo(m.x, m.y);
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         return { x: scrollX, y: scrollY };
+      }
+      if (m.type === 'scrollgif_viewport') {
+        return { width: innerWidth, height: innerHeight, dpr: devicePixelRatio };
       }
       if (m.type === 'scrollgif_measure') {
         if (m.selector) {
@@ -770,9 +808,7 @@ async function nativePress(tabId, chord) {
     code: /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : '',
     keyCode: key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0,
   };
-  const send = (method, params) => chrome.debugger.sendCommand(target, method, params);
-  await chrome.debugger.attach(target, '1.3');
-  try {
+  await withDebugger(tabId, async (send) => {
     const common = {
       key: info.key,
       code: info.code,
@@ -784,9 +820,7 @@ async function nativePress(tabId, chord) {
     if (info.key.length === 1 && !(modifiers & 7))
       await send('Input.dispatchKeyEvent', { type: 'char', ...common, text: info.key });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', ...common });
-  } finally {
-    await chrome.debugger.detach(target).catch(() => {});
-  }
+  });
 }
 
 function modifierBits(modifiers = []) {
@@ -794,16 +828,6 @@ function modifierBits(modifiers = []) {
     (bits, modifier) => bits | ({ alt: 1, ctrl: 2, meta: 4, shift: 8 }[modifier] ?? 0),
     0,
   );
-}
-
-async function withDebugger(tabId, operation) {
-  const target = { tabId };
-  await chrome.debugger.attach(target, '1.3');
-  try {
-    return await operation((method, params) => chrome.debugger.sendCommand(target, method, params));
-  } finally {
-    await chrome.debugger.detach(target).catch(() => {});
-  }
 }
 
 async function nativeClick(tabId, point, options) {
@@ -1040,22 +1064,13 @@ function routeName(url, index) {
 }
 
 async function captureMhtml(tabId) {
-  const target = { tabId };
-  await chrome.debugger.attach(target, '1.3');
-  try {
-    const result = await withTimeout(
-      chrome.debugger.sendCommand(target, 'Page.captureSnapshot', { format: 'mhtml' }),
+  return withDebugger(tabId, async (send) =>
+    withTimeout(
+      send('Page.captureSnapshot', { format: 'mhtml' }),
       15_000,
       'scrape_snapshot_timeout',
-    );
-    return new TextEncoder().encode(result.data);
-  } finally {
-    await withTimeout(
-      chrome.debugger.detach(target),
-      5_000,
-      'scrape_debugger_detach_timeout',
-    ).catch(() => {});
-  }
+    ).then((result) => new TextEncoder().encode(result.data)),
+  );
 }
 
 async function scrapeRoutes(tabId, windowId, message) {
@@ -1260,7 +1275,11 @@ async function recordScroll(tabId, message) {
   const holdCount = Math.max(1, Math.round((holdMs * fps) / 1000));
   await withDebugger(tabId, async (send) => {
     const capture = async () => {
-      const shot = await send('Page.captureScreenshot', { format: 'png' });
+      // With device emulation, crop the window surface to the emulated viewport.
+      const params = { format: 'png' };
+      if (state.device)
+        params.clip = { x: 0, y: 0, width: state.device.width, height: state.device.height, scale: 1 };
+      const shot = await send('Page.captureScreenshot', params);
       return createImageBitmap(await (await fetch(`data:image/png;base64,${shot.data}`)).blob());
     };
     const emit = async (bitmap, hold) => {
@@ -1291,7 +1310,11 @@ async function recordScroll(tabId, message) {
     };
     const captureAt = async (y, hold) => {
       const response = await scroll(y);
-      if (settleMs) await new Promise((resolve) => setTimeout(resolve, settleMs));
+      // Held frames (the top and bottom pauses) get extra settle time so
+      // scroll-triggered reveals and lazy images finish before they are
+      // captured; the pause magnifies any half-faded content.
+      const wait = hold ? settleMs * 4 : settleMs;
+      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
       await emit(await capture(), hold);
       return response;
     };
@@ -1394,6 +1417,28 @@ async function execute(message) {
       result = await scrapeRoutes(state.tabId, controlTab.windowId, message);
     } else if (message.type === 'scrollgif') {
       result = await recordScroll(state.tabId, message);
+    } else if (message.type === 'device') {
+      if (message.clear) {
+        if (state.debuggerTabId != null)
+          await chrome.debugger.detach({ tabId: state.debuggerTabId }).catch(() => {});
+        resetDeviceEmulation();
+        result = { action: 'device-cleared' };
+      } else {
+        if (!Number.isInteger(message.width) || !Number.isInteger(message.height))
+          throw new Error('device_size_required');
+        // Reuse the session attachment when present; Chrome keeps the
+        // emulation only while the debugger stays attached.
+        await ensureDebuggerAttached(state.tabId);
+        const viewport = message.width && message.height ? undefined : (await page(state.tabId, { type: 'scrollgif_viewport' }))[0]?.result;
+        await chrome.debugger.sendCommand({ tabId: state.tabId }, 'Emulation.setDeviceMetricsOverride', {
+          width: message.width ?? viewport?.width ?? 0,
+          height: message.height ?? viewport?.height ?? 0,
+          deviceScaleFactor: 0,
+          mobile: !!message.mobile,
+        });
+        state.device = { width: message.width ?? viewport?.width, height: message.height ?? viewport?.height, mobile: !!message.mobile };
+        result = { action: 'device-set', ...state.device };
+      }
     } else if (message.type === 'click') {
       result = await clickAndWait(state.tabId, message);
     } else if (message.type === 'press') {
@@ -1490,6 +1535,20 @@ async function execute(message) {
         );
       if (message.fullPage || message.selector) {
         result = await stitchedScreenshot(state.tabId, controlTab.windowId, message.selector);
+      } else if (state.device) {
+        // With device emulation the visible surface is larger than the
+        // emulated viewport; capture exactly the emulated viewport instead.
+        result = await withDebugger(state.tabId, async (send) => {
+          const shot = await send('Page.captureScreenshot', {
+            format: 'png',
+            clip: { x: 0, y: 0, width: state.device.width, height: state.device.height, scale: 1 },
+            captureBeyondViewport: false,
+          });
+          const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${shot.data}`)).blob());
+          const sized = { data: shot.data, mimeType: 'image/png', width: bitmap.width, height: bitmap.height };
+          bitmap.close();
+          return sized;
+        });
       } else {
         await new Promise((resolve) => setTimeout(resolve, 400));
         const data = await chrome.tabs.captureVisibleTab(controlTab.windowId, { format: 'png' });
@@ -1499,6 +1558,9 @@ async function execute(message) {
       }
     } else if (message.type === 'close') {
       state.session = null;
+      if (state.debuggerTabId != null)
+        await chrome.debugger.detach({ tabId: state.debuggerTabId }).catch(() => {});
+      resetDeviceEmulation();
     }
     if (result === 'element_not_found') throw new Error('element_not_found');
     if (result === 'element_not_fillable') throw new Error('element_not_fillable');
@@ -1730,6 +1792,7 @@ function resetNativeState() {
   state.controlTabId = null;
   state.pairingTabId = null;
   state.tabId = null;
+  resetDeviceEmulation();
   chrome.storage.local.remove(['controlTabId']).catch(() => {});
   chrome.storage.session.remove(['tabId']).catch(() => {});
 }
@@ -1737,6 +1800,13 @@ function resetNativeState() {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId !== state.controlTabId) return;
   resetNativeState();
+  resetDeviceEmulation();
+});
+
+// The debugger attachment (and with it the device emulation) is lost when the
+// user closes the infobar or opens DevTools on the tab.
+chrome.debugger.onDetach.addListener((source) => {
+  if (source?.tabId === state.debuggerTabId) resetDeviceEmulation();
 });
 
 chrome.runtime.onStartup.addListener(() => {

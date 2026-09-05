@@ -461,6 +461,8 @@ describe('CLI transport', () => {
       ['type', '--label', 'Search', '--value', 'kebap', '--clear', '--delay', '25', '--submit', '--json'],
       ['click', '--at', '120,240', '--button', 'right', '--json'],
       ['scrollgif', '--fps', '25', '--step', '40', '--selector', '.feed', '--json'],
+      ['device', '390x844', '--mobile', '--json'],
+      ['device', '--clear', '--json'],
     ];
     for (const invocationArgs of invocations) {
       const child = spawn(process.execPath, [path.join(import.meta.dir, 'index.ts'), ...invocationArgs], {
@@ -474,6 +476,8 @@ describe('CLI transport', () => {
       { type: 'type', session: 'last', locator: { by: 'label', value: 'Search', exact: false }, text: 'kebap', delay: 25, clear: true, submit: true },
       { type: 'click', session: 'last', button: 'right', x: 120, y: 240 },
       { type: 'scrollgif', session: 'last', selector: '.feed', format: 'video', fps: 25, step: 40, dedicatedWindow: false },
+      { type: 'device', session: 'last', width: 390, height: 844, mobile: true },
+      { type: 'device', session: 'last', clear: true },
     ]);
   });
 });

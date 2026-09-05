@@ -45,6 +45,7 @@ const capabilities = [
   'screenshot.fullPage',
   'screenshot.element',
   'scrape.snapshot',
+  'device.emulation',
   'scrollgif.record',
 ] as const;
 export class Supervisor {
@@ -335,6 +336,8 @@ export class Supervisor {
       const required =
         c.type === 'scrape'
           ? 'scrape.snapshot'
+          : c.type === 'device'
+          ? 'device.emulation'
           : c.type === 'scrollgif'
           ? 'scrollgif.record'
           : c.type === 'screenshot'
@@ -482,6 +485,13 @@ export class Supervisor {
             });
           case 'activate':
             return s.adapter.activate();
+          case 'device':
+            return s.adapter.device({
+              width: c.width,
+              height: c.height,
+              mobile: c.mobile,
+              clear: c.clear,
+            });
           case 'wait':
             {
               const waitResult = await s.adapter.wait({
@@ -721,6 +731,7 @@ function makeExtensionSession(
     highlight: (locator, within, nth, duration) => call('highlight', { locator, within, nth, duration }),
     drag: (from, options) => call('drag', { from, ...options }),
     activate: () => call('activate', {}),
+    device: (o) => call('device', o),
     wait: (options) => call('wait', options),
     evaluate: (expression) => call('evaluate', { expression }),
     close: (reason) => call('close', { reason }),
