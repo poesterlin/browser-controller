@@ -110,12 +110,14 @@ export class QueuedSession {
   private closed = false;
   readonly deadline: ReturnType<typeof setTimeout>;
   readonly deadlineAt: number;
+  private readonly lifetimeMs: number;
   constructor(
     public readonly id: string,
     public readonly name: string | undefined,
     public readonly adapter: BrowserSession,
     lifetimeMs = 300_000,
   ) {
+    this.lifetimeMs = lifetimeMs;
     this.deadlineAt = Date.now() + lifetimeMs;
     this.deadline = setTimeout(() => {
       void this.close('session deadline');
@@ -142,11 +144,25 @@ export class QueuedSession {
             .finally(() => clearTimeout(timer));
         }),
     );
+    // The deadline is an inactivity limit, not an absolute one: long-running
+    // operations (e.g. a slow scrollgif recording) re-arm it on completion so
+    // an active session is never torn down mid-command.
     this.tail = run.then(
-      () => undefined,
-      () => undefined,
+      () => this.rearmDeadline(),
+      () => this.rearmDeadline(),
     );
     return run;
+  }
+  private rearmDeadline() {
+    if (this.closed) return;
+    clearTimeout(this.deadline);
+    const deadlineAt = Date.now() + this.lifetimeMs;
+    (this as { deadlineAt: number }).deadlineAt = deadlineAt;
+    const deadline = setTimeout(() => {
+      void this.close('session deadline');
+    }, this.lifetimeMs);
+    deadline.unref?.();
+    (this as { deadline: ReturnType<typeof setTimeout> }).deadline = deadline;
   }
   disconnect() {
     if (this.state === 'running') this.state = 'disconnected';

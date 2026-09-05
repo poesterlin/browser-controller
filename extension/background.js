@@ -1310,16 +1310,25 @@ async function recordScroll(tabId, message) {
   let frames = 0;
   let reached = total;
   const holdCount = Math.max(1, Math.round((holdMs * fps) / 1000));
-  await withDebugger(tabId, async (send) => {
+  // Long single awaits (e.g. a slow beyond-viewport capture) can outlive
+  // Chrome's 30s service-worker idle limit; this beat keeps the worker alive
+  // so the debugger attachment and the recording survive.
+  const keepalive = setInterval(() => {
+    chrome.runtime.getPlatformInfo().catch(() => {});
+  }, 25_000);
+  try {
+    await withDebugger(tabId, async (send) => {
     // Capturing with captureBeyondViewport forces Chrome to raster the clip
     // region explicitly. Under device emulation the compositor otherwise
     // fails to paint scrolled-in content (frames past ~1000px come out
     // blank), and a document-coordinate clip reproduces the visible viewport
     // exactly for both paths.
     const capture = async (docY) => {
-      if (metrics.mode !== 'page') {
-        // Element scrolling captures the visible surface (element offset
-        // tracking for document-coordinate clips is not implemented).
+      if (metrics.mode !== 'page' || !state.device) {
+        // Plain surface capture: fast enough for a service-worker keepalive
+        // cadence on any page. The document-coordinate re-raster below is
+        // only needed for device emulation, where the compositor otherwise
+        // fails to paint scrolled-in content.
         const params = { format: 'png' };
         if (state.device)
           params.clip = { x: 0, y: 0, width: state.device.width, height: state.device.height, scale: 1 };
@@ -1396,6 +1405,9 @@ async function recordScroll(tabId, message) {
       await scroll(original.y).catch(() => {});
     }
   });
+  } finally {
+    clearInterval(keepalive);
+  }
   if (video) {
     let bytes = 0;
     for (const frame of videoFrames) bytes += 4 + frame.length;
