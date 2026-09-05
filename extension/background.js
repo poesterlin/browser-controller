@@ -74,23 +74,47 @@ async function page(tabId, message) {
     target: { tabId },
     world: 'MAIN',
     func: async (m) => {
-      if (m.type === 'evaluate') {
-        const safeStringify = (value) => {
-          const seen = new WeakSet();
-          return JSON.stringify(value, (_key, item) => {
-            if (typeof item === 'bigint') return String(item);
-            if (typeof item === 'function')
-              return `[Function${item.name ? ` ${item.name}` : ''}]`;
-            if (typeof item === 'object' && item !== null) {
-              if (seen.has(item)) return '[Circular]';
-              seen.add(item);
+      if (m.type === 'scrollgif_consent') {
+        const isVisible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        const clickFirst = (selector) => {
+          for (const el of document.querySelectorAll(selector)) {
+            if (isVisible(el)) {
+              el.click();
+              return selector;
             }
-            return item;
-          });
+          }
+          return null;
         };
-        const value = await (0, eval)(m.expression); // oxlint-disable-line no-eval -- evaluate capability requires page-world eval
-        if (value === undefined) return null;
-        return JSON.parse(safeStringify(value));
+        // Well-known consent buttons first, then text matching restricted to
+        // banner-like containers (cookie/consent/gdpr ancestry or fixed
+        // position) so ordinary page buttons can never be clicked by mistake.
+        for (const selector of [
+          '#onetrust-accept-btn-handler',
+          '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+          '#cookie_action_accept',
+          '.cli_action_button[data-cli_action="accept"]',
+          '.cm-btn-accept',
+          '#accept-all-button',
+          '.cc-allow',
+          '#cookieconsent-accept',
+        ])
+          if (clickFirst(selector)) return `clicked ${selector}`;
+        const acceptText =
+          /^(accept all|accept|allow all|allow|agree|consent|got it|ok|alle akzeptieren|akzeptieren|zustimmen|einverstanden|verstanden|alles klar|speichern und zustimmen)\.?$/i;
+        for (const el of document.querySelectorAll(
+          'button, a[role="button"], input[type="button"], input[type="submit"]',
+        )) {
+          if (!isVisible(el)) continue;
+          const label = (el.innerText || el.value || (el.getAttribute('aria-label') ?? '')).trim();
+          if (!label || label.length > 40 || !acceptText.test(label)) continue;
+          const banner = el.closest(
+            '[id*="cookie" i],[class*="cookie" i],[id*="consent" i],[class*="consent" i],[id*="gdpr" i],[class*="gdpr" i],[id*="cmplz" i],[id*="borlabs" i],[class*="borlabs" i],[id*="moove" i],[id*="cc-window" i],[class*="cc-window" i]',
+          );
+          if (!banner && getComputedStyle(el).position !== 'fixed') continue;
+          el.click();
+          return `clicked "${label}"`;
+        }
+        return null;
       }
       if (m.type === 'screenshot_region') {
         const element = m.selector ? document.querySelector(m.selector) : null;
@@ -134,6 +158,7 @@ async function page(tabId, message) {
             mode: 'element',
             maxScrollY,
             viewportHeight: el.clientHeight,
+            viewportWidth: el.clientWidth,
             scroll: { x: el.scrollLeft, y: el.scrollTop },
           };
         }
@@ -143,6 +168,7 @@ async function page(tabId, message) {
           maxScrollY: Math.max(0, root.scrollHeight - innerHeight),
           maxScrollX: Math.max(0, root.scrollWidth - innerWidth),
           viewportHeight: innerHeight,
+          viewportWidth: innerWidth,
           scroll: { x: scrollX, y: scrollY },
         };
       }
@@ -1192,6 +1218,17 @@ async function recordScroll(tabId, message) {
   if (active?.id !== tabId)
     throw new Error('paired_control_tab_not_active: refusing to record a different active tab');
 
+  // Best-effort consent-banner dismissal so the recording does not show a
+  // cookie overlay; a no-op on pages without one.
+  let consentDismissed = null;
+  try {
+    const consentResponse = (await page(tabId, { type: 'scrollgif_consent' }))[0];
+    consentDismissed = consentResponse?.result ?? null;
+    if (consentDismissed) await new Promise((resolve) => setTimeout(resolve, 700));
+  } catch {
+    // Consent handling must never block a recording.
+  }
+
   const selector = typeof message.selector === 'string' && message.selector ? message.selector : undefined;
   const measureResponse = (await page(tabId, { type: 'scrollgif_measure', selector }))[0];
   if (measureResponse?.error)
@@ -1274,12 +1311,28 @@ async function recordScroll(tabId, message) {
   let reached = total;
   const holdCount = Math.max(1, Math.round((holdMs * fps) / 1000));
   await withDebugger(tabId, async (send) => {
-    const capture = async () => {
-      // With device emulation, crop the window surface to the emulated viewport.
-      const params = { format: 'png' };
-      if (state.device)
-        params.clip = { x: 0, y: 0, width: state.device.width, height: state.device.height, scale: 1 };
-      const shot = await send('Page.captureScreenshot', params);
+    // Capturing with captureBeyondViewport forces Chrome to raster the clip
+    // region explicitly. Under device emulation the compositor otherwise
+    // fails to paint scrolled-in content (frames past ~1000px come out
+    // blank), and a document-coordinate clip reproduces the visible viewport
+    // exactly for both paths.
+    const capture = async (docY) => {
+      if (metrics.mode !== 'page') {
+        // Element scrolling captures the visible surface (element offset
+        // tracking for document-coordinate clips is not implemented).
+        const params = { format: 'png' };
+        if (state.device)
+          params.clip = { x: 0, y: 0, width: state.device.width, height: state.device.height, scale: 1 };
+        const shot = await send('Page.captureScreenshot', params);
+        return createImageBitmap(await (await fetch(`data:image/png;base64,${shot.data}`)).blob());
+      }
+      const width = state.device?.width ?? metrics.viewportWidth;
+      const height = state.device?.height ?? metrics.viewportHeight;
+      const shot = await send('Page.captureScreenshot', {
+        format: 'png',
+        captureBeyondViewport: true,
+        clip: { x: 0, y: docY, width, height, scale: 1 },
+      });
       return createImageBitmap(await (await fetch(`data:image/png;base64,${shot.data}`)).blob());
     };
     const emit = async (bitmap, hold) => {
@@ -1315,7 +1368,7 @@ async function recordScroll(tabId, message) {
       // captured; the pause magnifies any half-faded content.
       const wait = hold ? settleMs * 4 : settleMs;
       if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
-      await emit(await capture(), hold);
+      await emit(await capture(response?.y ?? y), hold);
       return response;
     };
     try {
@@ -1364,6 +1417,7 @@ async function recordScroll(tabId, message) {
       fps,
       frames,
       pixelsScrolled: reached,
+      consentDismissed,
       durationMs: Math.round((frames * 1000) / fps),
       bytes: archive.length,
     };
@@ -1379,6 +1433,7 @@ async function recordScroll(tabId, message) {
     fps,
     frames,
     pixelsScrolled: reached,
+    consentDismissed,
     durationMs: frames * encoder.delay * 10 + holdExtra * 10,
     bytes: archive.length,
   };
@@ -1484,8 +1539,23 @@ async function execute(message) {
       const tab = await chrome.tabs.update(state.tabId, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
       result = { action: 'activated', tabId: state.tabId, windowId: tab.windowId };
+    } else if (message.type === 'evaluate') {
+      // CDP Runtime.evaluate runs in the debugger context and is exempt from
+      // the page's CSP, so evaluation works on pages that forbid eval (where
+      // MAIN-world script injection would silently return nothing).
+      result = await withDebugger(state.tabId, async (send) => {
+        const evaluation = await send('Runtime.evaluate', {
+          expression: message.expression,
+          returnByValue: true,
+          awaitPromise: true,
+        });
+        if (evaluation.exceptionDetails)
+          throw new Error(
+            `evaluate_error: ${evaluation.exceptionDetails.exception?.description ?? evaluation.exceptionDetails.text}`,
+          );
+        return evaluation.result?.value === undefined ? null : evaluation.result.value;
+      });
     } else if (
-      message.type === 'evaluate' ||
       message.type === 'dom' ||
       message.type === 'fill' ||
       message.type === 'select' ||
@@ -1536,13 +1606,19 @@ async function execute(message) {
       if (message.fullPage || message.selector) {
         result = await stitchedScreenshot(state.tabId, controlTab.windowId, message.selector);
       } else if (state.device) {
-        // With device emulation the visible surface is larger than the
-        // emulated viewport; capture exactly the emulated viewport instead.
+        // With device emulation the compositor can fail to paint scrolled-in
+        // content, and the surface is larger than the emulated viewport; a
+        // document-coordinate clip with forced re-raster fixes both.
         result = await withDebugger(state.tabId, async (send) => {
+          const probe = await send('Runtime.evaluate', {
+            expression: 'JSON.stringify({y: scrollY})',
+            returnByValue: true,
+          });
+          const view = JSON.parse(probe.result?.value ?? '{}');
           const shot = await send('Page.captureScreenshot', {
             format: 'png',
-            clip: { x: 0, y: 0, width: state.device.width, height: state.device.height, scale: 1 },
-            captureBeyondViewport: false,
+            captureBeyondViewport: true,
+            clip: { x: 0, y: view.y ?? 0, width: state.device.width, height: state.device.height, scale: 1 },
           });
           const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${shot.data}`)).blob());
           const sized = { data: shot.data, mimeType: 'image/png', width: bitmap.width, height: bitmap.height };

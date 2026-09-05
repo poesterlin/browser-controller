@@ -806,6 +806,7 @@ async function main() {
               width: result.width,
               height: result.height,
               pixelsScrolled: result.pixelsScrolled,
+              consentDismissed: result.consentDismissed ?? undefined,
               durationMs: result.durationMs,
             });
             return finish();
@@ -836,6 +837,7 @@ async function main() {
               width: result.width,
               height: result.height,
               pixelsScrolled: result.pixelsScrolled,
+              consentDismissed: result.consentDismissed ?? undefined,
               durationMs: result.durationMs,
             });
           } catch (error) {
