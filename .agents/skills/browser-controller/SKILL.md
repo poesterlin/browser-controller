@@ -1,6 +1,6 @@
 ---
 name: browser-controller
-description: Control the user's existing Chromium tab with browserctl when a task requires live navigation, DOM inspection, form interaction, page-world JavaScript, waits, or screenshots. Use for browser UI workflows, including when the user explicitly asks to perform an action through a site's interface.
+description: Control the user's existing Chromium tab with browserctl when a task requires live navigation, DOM inspection, form interaction, page-world JavaScript, waits, screenshots, device-viewport emulation, or scrolling screen-capture video. Use for browser UI workflows, including when the user explicitly asks to perform an action through a site's interface.
 ---
 
 # Browser Controller
@@ -42,6 +42,8 @@ browserctl bounds LOCATOR --json
 browserctl highlight LOCATOR [--duration-ms 2000] --json
 browserctl drag --from-selector CSS (--to-selector CSS | --to-x N --to-y N) --json
 browserctl activate --json
+browserctl device WIDTHxHEIGHT [--mobile] | device --clear --json
+browserctl scrollgif [--selector CSS] [--fps N] [--format gif|video] [--output FILE] [--dedicated-window] --json
 browserctl wait LOCATOR [--state visible|attached|hidden] [--count N | --value VALUE | --changes] [--timeout MS] --json
 browserctl wait --url URL [--timeout MS] --json
 browserctl wait --url-glob GLOB [--timeout MS] --json
@@ -77,6 +79,8 @@ Omit the locator to send the chord to the page's current active element.
 
 Rich clicks support `--button`, `--double`, repeatable `--modifier`, center-relative `--offset-x`/`--offset-y`, and `--hold-ms`. `drag` uses prefixed source/target locators such as `--from-text Todo --to-text Done`; coordinate targets are a fallback. Native drag requires source and target to share the current viewport, so use `bounds` and `scroll --into-view` first. `highlight` outlines a unique match without waiting for the highlight duration. `activate` visibly focuses the paired tab and window; use it only when the user requested or approved that focus change.
 
+`device WIDTHxHEIGHT [--mobile]` emulates a device viewport for every command on the session: pages render responsively with working media queries, so `dom`, clicks, screenshots, `scrollgif`, and `scrape` all operate at the chosen size. Omit one dimension to keep the current value in it. Chrome keeps the emulation only while its debugger stays attached, so the extension holds that attachment until `device --clear`, the session closes, or the infobar is dismissed; an extension reload also clears it, so re-run `device` after reloading. While emulation is set, the debugger infobar stays visible and screenshots capture exactly the emulated viewport.
+
 Use `--screenshot FILE.png` on `click`, `fill`, `type`, `select`, `press`, `scroll`, `drag`, or `dom` to capture the result in the same controller round-trip. Use `--intent TEXT` on mutations to retain the human-readable purpose in structured output.
 
 `wait` accepts exactly one locator, exact URL, URL glob, title substring, page-world expression, `--tab-active`, or `--window-focused`. Prefer it to sleeps after navigation, clicks, and form submissions. URL globs use `*` within one path segment and `**` across segments. Locator waits can require `--count N`, exact field/text `--value VALUE`, or `--changes` from the value observed when waiting starts; these predicates are mutually exclusive. Use `--evaluate` only when those built-ins cannot express the observable application state. Locator waits default to `visible`; `--state` only applies to locator waits. Results include the locator, requested state, matched and visible counts, and observed value where relevant. A hidden wait succeeds only when every matching element is hidden or no elements match. Clicks automatically wait for native form submissions; use `--wait-navigation` for other navigating controls.
@@ -89,13 +93,15 @@ DOM output has five formats via `--format` (default `clean_html`):
 - `json` — full recursive tree with ARIA lifted into an `aria` object; use with `--json` for machine parsing.
 - `html` — raw `outerHTML`, unfiltered; accepted as an undocumented escape hatch only.
 
-`--max-chars` (1–1,000,000, default 50,000) bounds the output and truncation is reported, including `totalItems` for `interactive` and `summary`. `--text-chars` (default 100) controls per-node text clipping. `--depth` bounds `clean_html` and `json` tree depth. When a locator matches repeated records, `--offset` and `--limit` select a stable slice and the result reports matched and returned counts. Scope before raising limits. `evaluate` safely serializes objects, arrays, bigints, functions, and circular references; return structured values directly rather than wrapping them in `JSON.stringify`.
+`--max-chars` (1–1,000,000, default 50,000) bounds the output and truncation is reported, including `totalItems` for `interactive` and `summary`. `--text-chars` (default 100) controls per-node text clipping. `--depth` bounds `clean_html` and `json` tree depth. When a locator matches repeated records, `--offset` and `--limit` select a stable slice and the result reports matched and returned counts. Scope before raising limits. `evaluate` safely serializes objects, arrays, bigints, functions, and circular references; return structured values directly rather than wrapping them in `JSON.stringify`. It runs through the Chrome debugger, so it works on pages whose CSP forbids eval. Pass the expression with `--expression` — a bare positional argument is silently ignored and evaluates an empty expression.
 
 Interactive and summary items include `inViewport`. `dom --diff` compares against the previous read with the same format, locator/scope, index, and pagination in that session. The first matching call establishes a baseline; later calls return up to 200 added and removed lines. Use `dom --output FILE` for large HTML or JSON payloads.
 
 Screenshots capture the active paired tab. The default captures its viewport. `--full-page` and `--selector CSS` scroll and stitch the full document or element, then restore the original scroll position. Pages with fixed or sticky content may show stitching artifacts.
 
 `scrape` navigates the active paired tab and creates a ZIP containing rendered MHTML plus a full-page stitched PNG for each discovered same-origin route. Sticky and fixed elements are retained only in the first tile. It strips query strings and fragments from discovery and defaults to 20 routes/50 MB/120 seconds, with hard limits of 50 routes/100 MB/10 minutes. Individual capture operations also have deadlines, and failed secondary routes are skipped. Treat archives as potentially private because MHTML includes content visible to the current browser session.
+
+`scrollgif` records the paired tab scrolling smoothly from top to true bottom (lazy-loaded content is discovered by a probe pass) and saves a full-color MP4 by default, or a GIF with `--format gif`. It needs the paired tab active; `--dedicated-window` moves it into its own window first at the original window's geometry, which keeps the responsive theme intact. Cookie-consent banners are best-effort dismissed before recording and the action is reported as `consentDismissed`; held first/last frames get extra settle time so scroll reveals and lazy images finish. Defaults (25 fps, step = viewport/48, hold 800 ms) are tuned for smoothness, not speed; `--selector` records a specific scrollable container instead of the page.
 
 Use `--dedicated-window` only when explicitly requested or when the user approves moving the paired tab. It moves that tab—and no other tab—into a new non-focused window so it remains the active tab in its own window during screenshots.
 
